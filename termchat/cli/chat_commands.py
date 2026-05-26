@@ -138,10 +138,63 @@ def _run_repl(chat: Chat, provider, project=None) -> int | None:
     if project:
         console.print(f"[dim]Project: [bold]{project.name}[/][/]")
     console.print(
-        "[dim]Type a message, or /help for commands. "
-        "Alt-Enter (Esc then Enter) for a new line. "
-        "Ctrl-D or /quit to exit.[/]\n"
+        "[dim]Type a message and press Enter. "
+        "[bold]/help[/] for in-chat commands · "
+        "Alt-Enter for a new line · "
+        "Ctrl-D or [bold]/quit[/] to exit · "
+        "[bold]tc -h[/] for all commands.[/]\n"
     )
+
+    # ── AI turn helper (closure over chat, provider, project) ─────────────
+    def _do_ai_turn(user_input: str) -> bool:
+        """Render user message, call AI, render response.
+
+        Returns True on success, False on API error (caller should continue).
+        """
+        console.print(Panel(
+            user_input,
+            title="[bold blue]You[/]",
+            border_style="blue",
+            title_align="left",
+            padding=(0, 1),
+        ))
+
+        streamed: list[str] = []
+        result_holder: list = [None]  # noqa: F841 (kept for future streaming)
+
+        def on_chunk(chunk: str) -> None:
+            streamed.append(chunk)
+
+        with console.status("[green]Thinking…[/]", spinner="dots"):
+            try:
+                user_msg, asst_msg, compressed = chat_engine.send_message(
+                    chat,
+                    user_input,
+                    provider,
+                    project=project,
+                    on_chunk=on_chunk,
+                    auto_compress=True,
+                )
+            except Exception as exc:
+                error(f"API error: {exc}")
+                return False
+
+        render_message(asst_msg)
+
+        if compressed:
+            console.print(
+                "[yellow dim]⚡ Context auto-compressed (50 k char limit reached).[/]"
+            )
+
+        if chat.key is None:
+            with console.status("[dim]Naming chat…[/]"):
+                raw = ctx.generate_chat_key(user_input, provider)
+                chat.key = database.update_chat_key(
+                    chat.id, database.unique_chat_key(raw)
+                )
+            console.print(Rule(f"[bold]{chat.key}[/]  [dim]{chat.model}[/]"))
+
+        return True
 
     while True:
         # ── Prompt ────────────────────────────────────────────────────────────
@@ -291,55 +344,8 @@ def _run_repl(chat: Chat, provider, project=None) -> int | None:
                 continue
 
         # ── AI turn ────────────────────────────────────────────────────────────
-        # Render the user message
-        console.print(Panel(
-            user_input,
-            title="[bold blue]You[/]",
-            border_style="blue",
-            title_align="left",
-            padding=(0, 1),
-        ))
-
-        # Stream assistant response inside a Live panel
-        streamed: list[str] = []
-        result_holder: list = [None]  # CompletionResult will land here
-
-        def on_chunk(chunk: str) -> None:
-            streamed.append(chunk)
-
-        # We'll collect everything then render (Live + streaming Markdown is
-        # complex; instead we show a spinner and render after)
-        with console.status("[green]Thinking…[/]", spinner="dots"):
-            try:
-                user_msg, asst_msg, compressed = chat_engine.send_message(
-                    chat,
-                    user_input,
-                    provider,
-                    project=project,
-                    on_chunk=on_chunk,
-                    auto_compress=True,
-                )
-            except Exception as exc:
-                error(f"API error: {exc}")
-                continue
-
-        # Render the completed assistant message
-        render_message(asst_msg)
-
-        if compressed:
-            console.print(
-                "[yellow dim]⚡ Context auto-compressed (50 k char limit reached).[/]"
-            )
-
-        # Generate a short key after the first exchange
-        if chat.key is None:
-            with console.status("[dim]Naming chat…[/]"):
-                raw = ctx.generate_chat_key(user_input, provider)
-                chat.key = database.update_chat_key(
-                    chat.id, database.unique_chat_key(raw)
-                )
-            # Reprint the rule so the new key is visible
-            console.print(Rule(f"[bold]{chat.key}[/]  [dim]{chat.model}[/]"))
+        if not _do_ai_turn(user_input):
+            continue
 
     return None
 
