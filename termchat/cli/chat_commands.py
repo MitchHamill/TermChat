@@ -121,7 +121,7 @@ def _resolve_provider(provider_name: str | None, model: str | None) -> tuple[str
 
 # ── REPL loop ─────────────────────────────────────────────────────────────────
 
-def _run_repl(chat: Chat, provider, project=None) -> int | None:
+def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = None) -> int | None:
     """Interactive REPL for a chat session.
 
     Returns a chat ID if the user issued /switch, otherwise None.
@@ -145,6 +145,9 @@ def _run_repl(chat: Chat, provider, project=None) -> int | None:
         "[bold]tc -h[/] for all commands.[/]\n"
     )
 
+    # Pre-seed: send the initial message before entering the loop
+    _initial_message = (initial_message or "").strip() or None
+
     # ── AI turn helper (closure over chat, provider, project) ─────────────
     def _do_ai_turn(user_input: str) -> bool:
         """Render user message, call AI, render response.
@@ -159,12 +162,6 @@ def _run_repl(chat: Chat, provider, project=None) -> int | None:
             padding=(0, 1),
         ))
 
-        streamed: list[str] = []
-        result_holder: list = [None]  # noqa: F841 (kept for future streaming)
-
-        def on_chunk(chunk: str) -> None:
-            streamed.append(chunk)
-
         with console.status("[green]Thinking…[/]", spinner="dots"):
             try:
                 user_msg, asst_msg, compressed = chat_engine.send_message(
@@ -172,7 +169,6 @@ def _run_repl(chat: Chat, provider, project=None) -> int | None:
                     user_input,
                     provider,
                     project=project,
-                    on_chunk=on_chunk,
                     auto_compress=True,
                 )
             except Exception as exc:
@@ -195,6 +191,9 @@ def _run_repl(chat: Chat, provider, project=None) -> int | None:
             console.print(Rule(f"[bold]{chat.key}[/]  [dim]{chat.model}[/]"))
 
         return True
+
+    if _initial_message:
+        _do_ai_turn(_initial_message)
 
     while True:
         # ── Prompt ────────────────────────────────────────────────────────────
@@ -387,7 +386,9 @@ def chat_group() -> None:
 @click.option("--model", "-m", default=None, help="Model override.")
 @click.option("--provider", default=None, type=str, help="Provider override.")
 @click.option("--title", "-t", default=None, help="Set a title immediately.")
-def chat_new(project_name: str | None, model: str | None, provider: str | None, title: str | None) -> None:
+@click.option("--initial-message", "initial_message", default=None, hidden=True,
+              help="Pre-seed the chat with this message (used programmatically).")
+def chat_new(project_name: str | None, model: str | None, provider: str | None, title: str | None, initial_message: str | None = None) -> None:
     """Start a new chat (opens an interactive session)."""
     pname, mname, prov = _resolve_provider(provider, model)
 
@@ -411,7 +412,7 @@ def chat_new(project_name: str | None, model: str | None, provider: str | None, 
         project_id = project.id
 
     chat = database.create_chat(mname, pname, project_id, title)
-    _handle_switch(_run_repl(chat, prov, project=project))
+    _handle_switch(_run_repl(chat, prov, project=project, initial_message=initial_message))
 
 
 @chat_group.command("resume")
