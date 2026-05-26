@@ -16,19 +16,32 @@ def _init_db() -> None:
 # ── Root group ────────────────────────────────────────────────────────────────
 
 
-@click.group()
+@click.group(invoke_without_command=True, context_settings={"allow_extra_args": True})
+@click.option("--project", "-p", "project_name", default=None,
+              help="Associate new chat with a project.")
+@click.option("--model", "-m", default=None, help="Model override.")
+@click.option("--provider", default=None, help="Provider override.")
 @click.version_option(package_name="termchat")
-def cli() -> None:
-    """termchat — manage AI chat conversations from your terminal.
+@click.pass_context
+def cli(ctx: click.Context, project_name: str | None, model: str | None, provider: str | None) -> None:
+    """termchat — AI chat in your terminal.
+
+    \b
+    Starts a new chat by default. Ctrl-D or /quit to exit.
+    Run [tc -h] or [termchat -h] to see all commands.
 
     \b
     Quick start:
       termchat setup              Configure your API key
-      termchat chat new           Start a new conversation
       termchat chat list          List previous chats
       termchat project new NAME   Create a project with custom instructions
     """
     _init_db()
+    if ctx.invoked_subcommand is None:
+        from termchat.cli.chat_commands import chat_new
+        initial_message = " ".join(ctx.args).strip() or None
+        ctx.invoke(chat_new, project_name=project_name, model=model,
+                   provider=provider, initial_message=initial_message)
 
 
 # ── Sub-groups / commands ──────────────────────────────────────────────────────
