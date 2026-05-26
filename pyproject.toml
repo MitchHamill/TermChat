@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=42", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "termchat"
+version = "0.1.0"
+description = "A CLI application for managing AI chat conversations with project support"
+requires-python = ">=3.9"
+dependencies = [
+    "anthropic>=0.40.0",
+    "click>=8.1.0",
+    "rich>=13.0.0",
+    "prompt_toolkit>=3.0.0",
+]
+
+[project.scripts]
+termchat = "termchat.cli.main:cli"
+tc = "termchat.cli.main:cli"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["termchat*"]
