@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import typing as t
+
 import click
 
 from termchat import config as cfg
@@ -16,7 +18,21 @@ def _init_db() -> None:
 # ── Root group ────────────────────────────────────────────────────────────────
 
 
-@click.group(invoke_without_command=True, context_settings={"allow_extra_args": True})
+class _CatchAllGroup(click.Group):
+    """click.Group that treats an unrecognised first positional arg as free-form
+    extra args rather than raising 'No such command'."""
+
+    def invoke(self, ctx: click.Context) -> t.Any:
+        combined = ctx.protected_args + ctx.args
+        if combined and self.get_command(ctx, combined[0]) is None:
+            # Not a known subcommand — stash in meta, clear so no dispatch error
+            ctx.meta["initial_args"] = combined
+            ctx.protected_args = []
+            ctx.args = []
+        return super().invoke(ctx)
+
+
+@click.group(cls=_CatchAllGroup, invoke_without_command=True)
 @click.option("--project", "-p", "project_name", default=None,
               help="Associate new chat with a project.")
 @click.option("--model", "-m", default=None, help="Model override.")
@@ -39,7 +55,8 @@ def cli(ctx: click.Context, project_name: str | None, model: str | None, provide
     _init_db()
     if ctx.invoked_subcommand is None:
         from termchat.cli.chat_commands import chat_new
-        initial_message = " ".join(ctx.args).strip() or None
+        extra = ctx.meta.get("initial_args", [])
+        initial_message = " ".join(extra).strip() or None
         ctx.invoke(chat_new, project_name=project_name, model=model,
                    provider=provider, initial_message=initial_message)
 
