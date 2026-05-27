@@ -14,6 +14,7 @@ from __future__ import annotations
 
 from prompt_toolkit import Application
 from prompt_toolkit.formatted_text import StyleAndTextTuples
+from prompt_toolkit.filters import Condition
 from prompt_toolkit.key_binding import KeyBindings
 from prompt_toolkit.layout import HSplit, Layout, Window
 from prompt_toolkit.layout.controls import FormattedTextControl
@@ -170,25 +171,30 @@ class Launcher:
         def inv():
             app_ref[0].invalidate()
 
+        # Pre-build Condition objects (prompt_toolkit requires these, not raw lambdas)
+        is_confirming       = Condition(lambda: self._confirming)
+        is_bulk_confirming  = Condition(lambda: self._bulk_confirming)
+        is_bulk_selecting   = Condition(lambda: self._bulk_mode and not self._bulk_confirming)
+        is_normal           = Condition(lambda: not self._confirming and not self._bulk_mode)
+
         # ── Confirm-mode keys (single delete) ──────────────────────────────
-        @kb.add("y", filter=lambda: self._confirming)
+        @kb.add("y", filter=is_confirming)
         def _confirm_yes(_event):
             items = self._current_list()
             if items and self.tab == "chats":
-                chat = items[self.index]
-                database.delete_chat(chat.id)
+                database.delete_chat(items[self.index].id)
                 self._refresh_chats()
             self._confirming = False
             inv()
 
-        @kb.add("n",      filter=lambda: self._confirming)
-        @kb.add("escape", filter=lambda: self._confirming)
+        @kb.add("n",      filter=is_confirming)
+        @kb.add("escape", filter=is_confirming)
         def _confirm_no(_event):
             self._confirming = False
             inv()
 
         # ── Bulk-confirm keys ───────────────────────────────────────────────
-        @kb.add("y", filter=lambda: self._bulk_confirming)
+        @kb.add("y", filter=is_bulk_confirming)
         def _bulk_confirm_yes(_event):
             for cid in self._bulk_selected:
                 database.delete_chat(cid)
@@ -198,14 +204,14 @@ class Launcher:
             self._refresh_chats()
             inv()
 
-        @kb.add("n",      filter=lambda: self._bulk_confirming)
-        @kb.add("escape", filter=lambda: self._bulk_confirming)
+        @kb.add("n",      filter=is_bulk_confirming)
+        @kb.add("escape", filter=is_bulk_confirming)
         def _bulk_confirm_no(_event):
             self._bulk_confirming = False
             inv()
 
         # ── Bulk-mode keys (selecting) ──────────────────────────────────────
-        @kb.add("space", filter=lambda: self._bulk_mode and not self._bulk_confirming)
+        @kb.add("space", filter=is_bulk_selecting)
         def _bulk_toggle(_event):
             items = self._current_list()
             if items and self.tab == "chats":
@@ -216,51 +222,48 @@ class Launcher:
                     self._bulk_selected.add(cid)
             inv()
 
-        @kb.add("D", filter=lambda: self._bulk_mode and not self._bulk_confirming)
+        @kb.add("D", filter=is_bulk_selecting)
         def _bulk_delete(_event):
             if self._bulk_selected:
                 self._bulk_confirming = True
                 inv()
 
-        @kb.add("escape", filter=lambda: self._bulk_mode and not self._bulk_confirming)
+        @kb.add("escape", filter=is_bulk_selecting)
         def _bulk_cancel(_event):
             self._bulk_mode = False
             self._bulk_selected = set()
             inv()
 
         # ── Normal keys ────────────────────────────────────────────────────
-        def _normal() -> bool:
-            return not self._confirming and not self._bulk_mode
-
-        @kb.add("up",   filter=_normal)
-        @kb.add("k",    filter=_normal)
+        @kb.add("up",   filter=is_normal)
+        @kb.add("k",    filter=is_normal)
         def _up(_event):
             items = self._current_list()
             if items:
                 self.index = max(0, self.index - 1)
             inv()
 
-        @kb.add("down", filter=_normal)
-        @kb.add("j",    filter=_normal)
+        @kb.add("down", filter=is_normal)
+        @kb.add("j",    filter=is_normal)
         def _down(_event):
             items = self._current_list()
             if items:
                 self.index = min(len(items) - 1, self.index + 1)
             inv()
 
-        @kb.add("1", filter=_normal)
+        @kb.add("1", filter=is_normal)
         def _tab1(_event):
             self.tab = "chats"
             self.index = 0
             inv()
 
-        @kb.add("2", filter=_normal)
+        @kb.add("2", filter=is_normal)
         def _tab2(_event):
             self.tab = "projects"
             self.index = 0
             inv()
 
-        @kb.add("enter", filter=_normal)
+        @kb.add("enter", filter=is_normal)
         def _open(_event):
             items = self._current_list()
             if not items:
@@ -272,27 +275,27 @@ class Launcher:
             )
             app_ref[0].exit()
 
-        @kb.add("n", filter=_normal)
+        @kb.add("n", filter=is_normal)
         def _new(_event):
             self.result = ("new_chat", None)
             app_ref[0].exit()
 
-        @kb.add("d", filter=_normal)
+        @kb.add("d", filter=is_normal)
         def _delete(_event):
             if self.tab == "chats" and self._current_list():
                 self._confirming = True
                 inv()
 
-        @kb.add("D", filter=_normal)
+        @kb.add("D", filter=is_normal)
         def _bulk_start(_event):
             if self.tab == "chats":
                 self._bulk_mode = True
                 self._bulk_selected = set()
                 inv()
 
-        @kb.add("q",   filter=_normal)
-        @kb.add("c-c", filter=_normal)
-        @kb.add("c-d", filter=_normal)
+        @kb.add("q",   filter=is_normal)
+        @kb.add("c-c", filter=is_normal)
+        @kb.add("c-d", filter=is_normal)
         def _quit(_event):
             self.result = ("quit", None)
             app_ref[0].exit()
