@@ -392,6 +392,14 @@ def _run_launcher(pname: str, mname: str, prov) -> None:
             _handle_switch(_run_repl(chat, prov))
             # After REPL exits, loop back to launcher
 
+        elif action == "new_project":
+            from termchat.tui.project_wizard import ProjectWizard
+            project = ProjectWizard().run()
+            if project:
+                chat = database.create_chat(mname, pname, project.id)
+                _handle_switch(_run_repl(chat, prov, project=project))
+            # project is None → wizard was cancelled; outer while loop re-shows launcher
+
         elif action == "open_chat":
             chat = item
             _, _, chat_prov = _resolve_provider(chat.provider, chat.model)
