@@ -100,14 +100,15 @@ class Launcher:
                     and isinstance(item, Chat)
                     and item.id in self._bulk_selected
                 )
-                if is_checked and is_cursor:
-                    lines.append(("class:checked", f"  ✓ {label}\n"))
-                elif is_checked:
-                    lines.append(("class:checked", f"  ✓ {label}\n"))
-                elif is_cursor:
-                    lines.append(("class:cursor", f"  ❯ {label}\n"))
-                else:
-                    lines.append(("", f"    {label}\n"))
+                # Two fixed-width columns before the label:
+                #   col1 (✓ / space) — selection state, always green
+                #   col2 (❯ / space) — cursor position, always blue
+                check_part = ("class:checked", "✓") if is_checked else ("", " ")
+                cursor_part = ("class:cursor", " ❯ ") if is_cursor else ("", "   ")
+                lines.append(("", "  "))
+                lines.append(check_part)
+                lines.append(cursor_part)
+                lines.append(("", f"{label}\n"))
 
         return lines
 
