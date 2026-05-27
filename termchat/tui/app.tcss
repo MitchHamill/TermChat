@@ -1,5 +1,10 @@
 /* termchat — transparent background everywhere; colour only for text */
 
+/* App is the compositor root — must be transparent to show the terminal background */
+App {
+    background: transparent;
+}
+
 Screen {
     background: transparent;
 }

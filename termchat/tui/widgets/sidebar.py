@@ -35,6 +35,17 @@ class ProjectItem(ListItem):
 
 
 class ChatList(ListView):
+    # Override Textual's built-in filled highlight — colour only, no background
+    DEFAULT_CSS = """
+    ChatList > ListItem.--highlight {
+        background: transparent;
+        color: $accent;
+        text-style: bold;
+    }
+    ChatList > ListItem {
+        background: transparent;
+    }
+    """
     BINDINGS = [
         Binding("j", "cursor_down", "Down", show=False),
         Binding("k", "cursor_up", "Up", show=False),
@@ -53,6 +64,16 @@ class ChatList(ListView):
 
 
 class ProjectList(ListView):
+    DEFAULT_CSS = """
+    ProjectList > ListItem.--highlight {
+        background: transparent;
+        color: $accent;
+        text-style: bold;
+    }
+    ProjectList > ListItem {
+        background: transparent;
+    }
+    """
     BINDINGS = [
         Binding("j", "cursor_down", "Down", show=False),
         Binding("k", "cursor_up", "Up", show=False),
