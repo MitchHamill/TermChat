@@ -23,11 +23,13 @@ class _CatchAllGroup(click.Group):
     extra args rather than raising 'No such command'."""
 
     def invoke(self, ctx: click.Context) -> t.Any:
-        combined = ctx.protected_args + ctx.args
+        # Click 8.4+ made ctx.protected_args a read-only deprecated property;
+        # use the private backing attribute (_protected_args) for read and write.
+        combined = ctx._protected_args + ctx.args
         if combined and self.get_command(ctx, combined[0]) is None:
             # Not a known subcommand — stash in meta, clear so no dispatch error
             ctx.meta["termchat.initial_args"] = combined
-            ctx.protected_args = []
+            ctx._protected_args = []
             ctx.args = []
         return super().invoke(ctx)
 
