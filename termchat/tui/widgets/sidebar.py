@@ -108,3 +108,11 @@ class Sidebar(Widget):
         if isinstance(item, ProjectItem):
             return item.project_id
         return None
+
+    def set_bulk_selected(self, selected_ids: set[int]) -> None:
+        """Add/remove the bulk-selected CSS class on ChatItems to show selection state."""
+        for item in self.query_one(ChatList).query(ChatItem):
+            if item.chat_id in selected_ids:
+                item.add_class("bulk-selected")
+            else:
+                item.remove_class("bulk-selected")

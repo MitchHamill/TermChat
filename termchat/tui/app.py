@@ -327,6 +327,7 @@ class TermchatApp(App):
                 database.delete_chat(chat_id)
             self._bulk_mode = False
             self._bulk_selected = set()
+            self.sidebar.set_bulk_selected(set())
             chats = database.list_chats(limit=50)
             self.sidebar.refresh_chats(chats)
             if (
@@ -399,6 +400,7 @@ class TermchatApp(App):
                     self._bulk_selected.discard(chat_id)
                 else:
                     self._bulk_selected.add(chat_id)
+                self.sidebar.set_bulk_selected(self._bulk_selected)
                 self.notify(
                     f"{len(self._bulk_selected)} selected",
                     severity="information",
@@ -408,5 +410,6 @@ class TermchatApp(App):
         elif event.key == "escape":
             self._bulk_mode = False
             self._bulk_selected = set()
+            self.sidebar.set_bulk_selected(set())
             self.notify("Bulk select cancelled.", severity="information")
             event.stop()

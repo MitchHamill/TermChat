@@ -1,21 +1,21 @@
-"""Modal dialogs for termchat TUI."""
+"""Modal dialogs for termchat TUI — terminal-style text prompts, no buttons."""
 
 from __future__ import annotations
 
 from textual.app import ComposeResult
 from textual.binding import Binding
-from textual.containers import Horizontal, Vertical
+from textual.containers import Vertical
 from textual.screen import ModalScreen
-from textual.widgets import Button, Label
+from textual.widgets import Label
 
 
 class ConfirmModal(ModalScreen[bool]):
     """A yes/no confirmation modal. Dismisses with True (confirmed) or False (cancelled)."""
 
     BINDINGS = [
-        Binding("y", "confirm", "Yes", show=True),
-        Binding("n", "cancel", "No", show=True),
-        Binding("escape", "cancel", "Cancel", show=False),
+        Binding("y", "confirm", "yes", show=True),
+        Binding("n", "cancel", "no", show=True),
+        Binding("escape", "cancel", "cancel", show=False),
     ]
 
     def __init__(self, message: str) -> None:
@@ -25,9 +25,7 @@ class ConfirmModal(ModalScreen[bool]):
     def compose(self) -> ComposeResult:
         with Vertical(id="confirm-dialog"):
             yield Label(self._message, id="confirm-message")
-            with Horizontal(id="confirm-buttons"):
-                yield Button("Yes [y]", variant="error", id="confirm-yes")
-                yield Button("No [n]", variant="default", id="confirm-no")
+            yield Label("[ y ] yes    [ n ] no", id="confirm-keys")
 
     def action_confirm(self) -> None:
         self.dismiss(True)
@@ -35,17 +33,14 @@ class ConfirmModal(ModalScreen[bool]):
     def action_cancel(self) -> None:
         self.dismiss(False)
 
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        self.dismiss(event.button.id == "confirm-yes")
-
 
 class BulkDeleteModal(ModalScreen[bool]):
     """Confirm deletion of multiple chats."""
 
     BINDINGS = [
-        Binding("y", "confirm", "Yes", show=True),
-        Binding("n", "cancel", "No", show=True),
-        Binding("escape", "cancel", "Cancel", show=False),
+        Binding("y", "confirm", "yes", show=True),
+        Binding("n", "cancel", "no", show=True),
+        Binding("escape", "cancel", "cancel", show=False),
     ]
 
     def __init__(self, count: int) -> None:
@@ -56,15 +51,10 @@ class BulkDeleteModal(ModalScreen[bool]):
         noun = "chat" if self._count == 1 else "chats"
         with Vertical(id="confirm-dialog"):
             yield Label(f"Delete {self._count} {noun}?", id="confirm-message")
-            with Horizontal(id="confirm-buttons"):
-                yield Button("Yes [y]", variant="error", id="confirm-yes")
-                yield Button("No [n]", variant="default", id="confirm-no")
+            yield Label("[ y ] yes    [ n ] no", id="confirm-keys")
 
     def action_confirm(self) -> None:
         self.dismiss(True)
 
     def action_cancel(self) -> None:
         self.dismiss(False)
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        self.dismiss(event.button.id == "confirm-yes")
