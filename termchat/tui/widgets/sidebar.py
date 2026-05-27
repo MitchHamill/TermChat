@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.reactive import reactive
 from textual.widget import Widget
 from textual.widgets import Label, ListItem, ListView
@@ -29,6 +30,11 @@ class ProjectItem(ListItem):
 
 
 class ChatList(ListView):
+    BINDINGS = [
+        Binding("j", "cursor_down", "Down", show=False),
+        Binding("k", "cursor_up", "Up", show=False),
+    ]
+
     def populate(self, chats: list[Chat], active_id: int | None = None) -> None:
         """Clear and repopulate the list."""
         self.clear()
@@ -37,6 +43,11 @@ class ChatList(ListView):
 
 
 class ProjectList(ListView):
+    BINDINGS = [
+        Binding("j", "cursor_down", "Down", show=False),
+        Binding("k", "cursor_up", "Up", show=False),
+    ]
+
     def populate(self, projects: list[Project]) -> None:
         self.clear()
         for project in projects:
