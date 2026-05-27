@@ -151,10 +151,11 @@ class Launcher:
             ]
 
         # Normal
+        new_label = " new project  " if self.tab == "projects" else " new   "
         hints: StyleAndTextTuples = [
             ("class:cursor", "[↑↓/jk]"), ("class:footer", " navigate   "),
             ("class:cursor", "[enter]"),  ("class:footer", " open   "),
-            ("class:cursor", "[n]"),      ("class:footer", " new   "),
+            ("class:cursor", "[n]"),      ("class:footer", new_label),
         ]
         if self.tab == "chats":
             hints += [
@@ -296,7 +297,10 @@ class Launcher:
 
         @kb.add("n", filter=is_normal)
         def _new(_event):
-            self.result = ("new_chat", None)
+            if self.tab == "projects":
+                self.result = ("new_project", None)
+            else:
+                self.result = ("new_chat", None)
             app_ref[0].exit()
 
         @kb.add("d", filter=is_normal)
