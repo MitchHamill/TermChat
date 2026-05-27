@@ -90,7 +90,7 @@ def new_alias(ctx: click.Context, project_name: str | None, model: str | None, p
 @cli.command("ask")
 @click.argument("message")
 @click.option("--project", "-p", "project_name", default=None,
-              help="Associate new chat with a project.")
+              help="Associate with a project by name or id.")
 @click.option("--model", "-m", default=None, help="Model override.")
 @click.option("--provider", default=None, help="Provider override.")
 @click.option("--title", "-t", default=None, help="Set a title immediately.")
