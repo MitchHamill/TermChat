@@ -87,5 +87,21 @@ def new_alias(ctx: click.Context, project_name: str | None, model: str | None, p
     ctx.invoke(chat_new, project_name=project_name, model=model, provider=provider)
 
 
+@cli.command("ask")
+@click.argument("message")
+@click.option("--project", "-p", "project_name", default=None,
+              help="Associate new chat with a project.")
+@click.option("--model", "-m", default=None, help="Model override.")
+@click.option("--provider", default=None, help="Provider override.")
+@click.option("--title", "-t", default=None, help="Set a title immediately.")
+@click.pass_context
+def ask_cmd(ctx: click.Context, message: str, project_name: str | None,
+            model: str | None, provider: str | None, title: str | None) -> None:
+    """Start a new chat with MESSAGE as the opening prompt."""
+    from termchat.cli.chat_commands import chat_new
+    ctx.invoke(chat_new, project_name=project_name, model=model,
+               provider=provider, title=title, initial_message=message)
+
+
 if __name__ == "__main__":
     cli()
