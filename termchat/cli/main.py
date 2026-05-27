@@ -26,7 +26,7 @@ class _CatchAllGroup(click.Group):
         combined = ctx.protected_args + ctx.args
         if combined and self.get_command(ctx, combined[0]) is None:
             # Not a known subcommand — stash in meta, clear so no dispatch error
-            ctx.meta["initial_args"] = combined
+            ctx.meta["termchat.initial_args"] = combined
             ctx.protected_args = []
             ctx.args = []
         return super().invoke(ctx)
@@ -55,7 +55,7 @@ def cli(ctx: click.Context, project_name: str | None, model: str | None, provide
     _init_db()
     if ctx.invoked_subcommand is None:
         from termchat.cli.chat_commands import chat_new
-        extra = ctx.meta.get("initial_args", [])
+        extra = ctx.meta.get("termchat.initial_args", [])
         initial_message = " ".join(extra).strip() or None
         ctx.invoke(chat_new, project_name=project_name, model=model,
                    provider=provider, initial_message=initial_message)
