@@ -412,7 +412,8 @@ def chat_new(project_name: str | None, model: str | None, provider: str | None, 
         project_id = project.id
 
     chat = database.create_chat(mname, pname, project_id, title)
-    _handle_switch(_run_repl(chat, prov, project=project, initial_message=initial_message))
+    from termchat.tui.app import TermchatApp
+    TermchatApp(chat=chat, provider=prov, project=project).run()
 
 
 @chat_group.command("resume")
@@ -431,15 +432,8 @@ def chat_resume(chat_ref: str, model: str | None) -> None:
 
     project = database.get_project(chat.project_id) if chat.project_id else None
 
-    # Show existing history first
-    messages = database.get_messages(chat.id)
-    if messages:
-        console.print(Rule("[dim]Previous messages[/]"))
-        for msg in messages:
-            render_message(msg)
-        console.print()
-
-    _handle_switch(_run_repl(chat, prov, project=project))
+    from termchat.tui.app import TermchatApp
+    TermchatApp(chat=chat, provider=prov, project=project).run()
 
 
 @chat_group.command("list")
