@@ -372,6 +372,57 @@ def _handle_switch(next_id: int | None) -> None:
         next_id = _run_repl(target_chat, prov, project=project)
 
 
+# ── Launcher ──────────────────────────────────────────────────────────────────
+
+def _run_launcher(pname: str, mname: str, prov) -> None:
+    """Show the full-screen chat/project picker and loop until the user quits."""
+    from termchat.tui.launcher import Launcher
+
+    while True:
+        chats = database.list_chats(limit=50)
+        projects = database.list_projects()
+
+        action, item = Launcher(chats, projects).run()
+
+        if action == "quit":
+            break
+
+        elif action == "new_chat":
+            chat = database.create_chat(mname, pname)
+            _handle_switch(_run_repl(chat, prov))
+            # After REPL exits, loop back to launcher
+
+        elif action == "open_chat":
+            chat = item
+            _, _, chat_prov = _resolve_provider(chat.provider, chat.model)
+            project = database.get_project(chat.project_id) if chat.project_id else None
+            messages = database.get_messages(chat.id)
+            if messages:
+                console.print(Rule("[dim]Previous messages[/]"))
+                for msg in messages:
+                    render_message(msg)
+                console.print()
+            _handle_switch(_run_repl(chat, chat_prov, project=project))
+
+        elif action == "open_project":
+            project = item
+            chat = database.create_chat(mname, pname, project.id)
+            _handle_switch(_run_repl(chat, prov, project=project))
+
+        elif action == "delete_chat":
+            chat = item
+            label = chat.key or chat.title or f"#{chat.id}"
+            try:
+                confirmed = click.confirm(f"  Delete '{label}'?", default=False)
+            except click.Abort:
+                console.print()
+                confirmed = False
+            if confirmed:
+                database.delete_chat(chat.id)
+                success(f"'{label}' deleted.")
+            # Loop back to launcher either way
+
+
 # ── Commands ──────────────────────────────────────────────────────────────────
 
 
@@ -411,9 +462,14 @@ def chat_new(project_name: str | None, model: str | None, provider: str | None, 
             raise click.Abort()
         project_id = project.id
 
-    chat = database.create_chat(mname, pname, project_id, title)
-    from termchat.tui.app import TermchatApp
-    TermchatApp(chat=chat, provider=prov, project=project).run()
+    if initial_message:
+        # Non-interactive path (termchat ask "...") — skip launcher
+        chat = database.create_chat(mname, pname, project_id, title)
+        _handle_switch(_run_repl(chat, prov, project=project, initial_message=initial_message))
+        return
+
+    # Interactive path — show the launcher first
+    _run_launcher(pname, mname, prov)
 
 
 @chat_group.command("resume")
@@ -432,8 +488,15 @@ def chat_resume(chat_ref: str, model: str | None) -> None:
 
     project = database.get_project(chat.project_id) if chat.project_id else None
 
-    from termchat.tui.app import TermchatApp
-    TermchatApp(chat=chat, provider=prov, project=project).run()
+    # Show existing history first
+    messages = database.get_messages(chat.id)
+    if messages:
+        console.print(Rule("[dim]Previous messages[/]"))
+        for msg in messages:
+            render_message(msg)
+        console.print()
+
+    _handle_switch(_run_repl(chat, prov, project=project))
 
 
 @chat_group.command("list")
