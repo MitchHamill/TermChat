@@ -409,18 +409,7 @@ def _run_launcher(pname: str, mname: str, prov) -> None:
             chat = database.create_chat(mname, pname, project.id)
             _handle_switch(_run_repl(chat, prov, project=project))
 
-        elif action == "delete_chat":
-            chat = item
-            label = chat.key or chat.title or f"#{chat.id}"
-            try:
-                confirmed = click.confirm(f"  Delete '{label}'?", default=False)
-            except click.Abort:
-                console.print()
-                confirmed = False
-            if confirmed:
-                database.delete_chat(chat.id)
-                success(f"'{label}' deleted.")
-            # Loop back to launcher either way
+        # delete_chat is handled entirely inside the launcher (no terminal drop-out)
 
 
 # ── Commands ──────────────────────────────────────────────────────────────────
