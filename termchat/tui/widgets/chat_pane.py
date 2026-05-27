@@ -70,10 +70,9 @@ class MessageInput(TextArea):
     class Submit(TxtMessage):
         """Posted when the user submits a message."""
 
-        def __init__(self, sender: "MessageInput", *, text: str) -> None:
+        def __init__(self, *, text: str) -> None:
             super().__init__()
             self.text = text
-            self._sender = sender
 
     def __init__(self) -> None:
         super().__init__("", show_line_numbers=False, id="message-input")
@@ -82,16 +81,15 @@ class MessageInput(TextArea):
         """Submit the current text and clear the input."""
         text = self.text
         if text:
-            self.post_message(MessageInput.Submit(self, text=text))
+            self.post_message(MessageInput.Submit(text=text))
             self.clear()
 
     def _on_key(self, event: events.Key) -> None:
         """Allow Alt+Enter to insert a newline; plain Enter submits."""
-        if event.key == "enter" and event.character == "\n":
-            # Alt+Enter or Shift+Enter — let TextArea insert a newline
+        if event.key in ("alt+enter", "shift+enter"):
             event.prevent_default()
             self.insert("\n")
-        # Plain Enter is handled by the BINDINGS → action_submit above
+        # Plain "enter" is handled by BINDINGS → action_submit
 
 
 class ChatPane(Widget):
@@ -125,6 +123,8 @@ class ChatPane(Widget):
 
     def append_chunk(self, chunk: str) -> None:
         """Accumulate a streamed text chunk (not displayed until end_stream)."""
+        if not hasattr(self, "_stream_chunks"):
+            self._stream_chunks = []
         self._stream_chunks.append(chunk)
 
     def end_stream(self, msg: Message) -> None:
@@ -140,7 +140,7 @@ class ChatPane(Widget):
         hint = Text("Press ", style="dim")
         hint.append("n", style="bold dim")
         hint.append(" to start a new chat", style="dim")
-        self.message_log.write(Text.assemble(hint), shrink=False)
+        self.message_log.write(hint)
 
     def set_input_enabled(self, enabled: bool) -> None:
         """Enable or disable the message input."""
