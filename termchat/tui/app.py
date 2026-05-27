@@ -47,7 +47,6 @@ class TermchatApp(App):
     ) -> None:
         super().__init__()
         self._initial_chat = chat
-        self._initial_provider = provider
         self._initial_project = project
         # Current state
         self._active_chat: Chat | None = None
@@ -103,8 +102,9 @@ class TermchatApp(App):
     async def _open_chat(self, chat_id: int) -> None:
         """Load *chat_id* into the chat pane and make it the active chat."""
         if self._streaming:
-            # The streaming worker checks this flag; flipping it tells it to stop
-            # accepting further chunks. We don't kill the worker outright.
+            # Clear the flag so the input is re-enabled when the stream finishes,
+            # but do NOT kill the worker — the post-stream guard in _send_message
+            # will discard its results once it sees the active chat has changed.
             self._streaming = False
 
         chat = database.get_chat(chat_id)
@@ -173,6 +173,10 @@ class TermchatApp(App):
         self.chat_pane.set_input_enabled(False)
         self.chat_pane.begin_stream()
 
+        # Capture the chat ID before launching the worker so we can detect a
+        # mid-stream chat switch and discard stale post-stream mutations.
+        streaming_chat_id = self._active_chat.id
+
         # Capture for the thread closure
         chat = self._active_chat
         provider = self._provider
@@ -202,6 +206,11 @@ class TermchatApp(App):
         await worker.wait()
 
         self._streaming = False
+
+        # If the user switched chats while this stream was running, discard results
+        if self._active_chat is None or self._active_chat.id != streaming_chat_id:
+            self._streaming = False
+            return
 
         if error_container:
             self.chat_pane.message_log.write(
@@ -253,6 +262,9 @@ class TermchatApp(App):
 
     async def action_delete_chat(self) -> None:
         """Delete the highlighted (or active) chat after confirmation."""
+        if self._streaming:
+            self.notify("Cannot delete while a response is streaming.", severity="warning")
+            return
         chat_id = self.sidebar.get_highlighted_chat_id()
         if chat_id is None and self._active_chat is not None:
             chat_id = self._active_chat.id
@@ -286,6 +298,9 @@ class TermchatApp(App):
 
     async def action_bulk_delete(self) -> None:
         """Toggle bulk-select mode, or confirm deletion if already in bulk mode."""
+        if self._streaming:
+            self.notify("Cannot delete while a response is streaming.", severity="warning")
+            return
         if not self._bulk_mode:
             self._bulk_mode = True
             self._bulk_selected = set()
