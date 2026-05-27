@@ -211,6 +211,24 @@ class Launcher:
             inv()
 
         # ── Bulk-mode keys (selecting) ──────────────────────────────────────
+
+        # Navigation still works inside bulk mode
+        @kb.add("up",   filter=is_bulk_selecting)
+        @kb.add("k",    filter=is_bulk_selecting)
+        def _bulk_up(_event):
+            items = self._current_list()
+            if items:
+                self.index = max(0, self.index - 1)
+            inv()
+
+        @kb.add("down", filter=is_bulk_selecting)
+        @kb.add("j",    filter=is_bulk_selecting)
+        def _bulk_down(_event):
+            items = self._current_list()
+            if items:
+                self.index = min(len(items) - 1, self.index + 1)
+            inv()
+
         @kb.add("space", filter=is_bulk_selecting)
         def _bulk_toggle(_event):
             items = self._current_list()
