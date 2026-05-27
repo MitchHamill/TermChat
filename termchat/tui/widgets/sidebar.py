@@ -44,7 +44,7 @@ class ChatList(ListView):
             if active_id is not None and chat.id == active_id:
                 active_index = i
         if chats:
-            self.move_cursor(row=active_index)
+            self.index = active_index
 
 
 class ProjectList(ListView):
