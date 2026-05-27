@@ -36,10 +36,15 @@ class ChatList(ListView):
     ]
 
     def populate(self, chats: list[Chat], active_id: int | None = None) -> None:
-        """Clear and repopulate the list."""
+        """Clear and repopulate the list, restoring cursor to active_id."""
         self.clear()
-        for chat in chats:
+        active_index = 0
+        for i, chat in enumerate(chats):
             self.append(ChatItem(chat))
+            if active_id is not None and chat.id == active_id:
+                active_index = i
+        if chats:
+            self.move_cursor(row=active_index)
 
 
 class ProjectList(ListView):

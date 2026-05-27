@@ -172,6 +172,9 @@ class TermchatApp(App):
         self._streaming = True
         self.chat_pane.set_input_enabled(False)
         self.chat_pane.begin_stream()
+        # Show typing indicator in the subtitle so the user knows we're waiting
+        _prev_subtitle = self.sub_title
+        self.sub_title = f"{self.sub_title}  •  Claude is typing…"
 
         # Capture the chat ID before launching the worker so we can detect a
         # mid-stream chat switch and discard stale post-stream mutations.
@@ -206,10 +209,10 @@ class TermchatApp(App):
         await worker.wait()
 
         self._streaming = False
+        self.sub_title = _prev_subtitle  # restore subtitle (removes "typing…")
 
         # If the user switched chats while this stream was running, discard results
         if self._active_chat is None or self._active_chat.id != streaming_chat_id:
-            self._streaming = False
             return
 
         if error_container:
