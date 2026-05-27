@@ -121,7 +121,7 @@ def _resolve_provider(provider_name: str | None, model: str | None) -> tuple[str
 
 # ── REPL loop ─────────────────────────────────────────────────────────────────
 
-def _run_repl(chat: Chat, provider, project=None) -> int | None:
+def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = None) -> int | None:
     """Interactive REPL for a chat session.
 
     Returns a chat ID if the user issued /switch, otherwise None.
@@ -138,10 +138,62 @@ def _run_repl(chat: Chat, provider, project=None) -> int | None:
     if project:
         console.print(f"[dim]Project: [bold]{project.name}[/][/]")
     console.print(
-        "[dim]Type a message, or /help for commands. "
-        "Alt-Enter (Esc then Enter) for a new line. "
-        "Ctrl-D or /quit to exit.[/]\n"
+        "[dim]Type a message and press Enter. "
+        "[bold]/help[/] for in-chat commands · "
+        "Alt-Enter for a new line · "
+        "Ctrl-D or [bold]/quit[/] to exit · "
+        "[bold]tc -h[/] for all commands.[/]\n"
     )
+
+    # Pre-seed: send the initial message before entering the loop
+    _initial_message = (initial_message or "").strip() or None
+
+    # ── AI turn helper (closure over chat, provider, project) ─────────────
+    def _do_ai_turn(user_input: str) -> bool:
+        """Render user message, call AI, render response.
+
+        Returns True on success, False on API error (caller should continue).
+        """
+        console.print(Panel(
+            user_input,
+            title="[bold blue]You[/]",
+            border_style="blue",
+            title_align="left",
+            padding=(0, 1),
+        ))
+
+        with console.status("[green]Thinking…[/]", spinner="dots"):
+            try:
+                user_msg, asst_msg, compressed = chat_engine.send_message(
+                    chat,
+                    user_input,
+                    provider,
+                    project=project,
+                    auto_compress=True,
+                )
+            except Exception as exc:
+                error(f"API error: {exc}")
+                return False
+
+        render_message(asst_msg)
+
+        if compressed:
+            console.print(
+                "[yellow dim]⚡ Context auto-compressed (50 k char limit reached).[/]"
+            )
+
+        if chat.key is None:
+            with console.status("[dim]Naming chat…[/]"):
+                raw = ctx.generate_chat_key(user_input, provider)
+                chat.key = database.update_chat_key(
+                    chat.id, database.unique_chat_key(raw)
+                )
+            console.print(Rule(f"[bold]{chat.key}[/]  [dim]{chat.model}[/]"))
+
+        return True
+
+    if _initial_message:
+        _do_ai_turn(_initial_message)
 
     while True:
         # ── Prompt ────────────────────────────────────────────────────────────
@@ -291,55 +343,8 @@ def _run_repl(chat: Chat, provider, project=None) -> int | None:
                 continue
 
         # ── AI turn ────────────────────────────────────────────────────────────
-        # Render the user message
-        console.print(Panel(
-            user_input,
-            title="[bold blue]You[/]",
-            border_style="blue",
-            title_align="left",
-            padding=(0, 1),
-        ))
-
-        # Stream assistant response inside a Live panel
-        streamed: list[str] = []
-        result_holder: list = [None]  # CompletionResult will land here
-
-        def on_chunk(chunk: str) -> None:
-            streamed.append(chunk)
-
-        # We'll collect everything then render (Live + streaming Markdown is
-        # complex; instead we show a spinner and render after)
-        with console.status("[green]Thinking…[/]", spinner="dots"):
-            try:
-                user_msg, asst_msg, compressed = chat_engine.send_message(
-                    chat,
-                    user_input,
-                    provider,
-                    project=project,
-                    on_chunk=on_chunk,
-                    auto_compress=True,
-                )
-            except Exception as exc:
-                error(f"API error: {exc}")
-                continue
-
-        # Render the completed assistant message
-        render_message(asst_msg)
-
-        if compressed:
-            console.print(
-                "[yellow dim]⚡ Context auto-compressed (50 k char limit reached).[/]"
-            )
-
-        # Generate a short key after the first exchange
-        if chat.key is None:
-            with console.status("[dim]Naming chat…[/]"):
-                raw = ctx.generate_chat_key(user_input, provider)
-                chat.key = database.update_chat_key(
-                    chat.id, database.unique_chat_key(raw)
-                )
-            # Reprint the rule so the new key is visible
-            console.print(Rule(f"[bold]{chat.key}[/]  [dim]{chat.model}[/]"))
+        if not _do_ai_turn(user_input):
+            continue
 
     return None
 
@@ -381,7 +386,9 @@ def chat_group() -> None:
 @click.option("--model", "-m", default=None, help="Model override.")
 @click.option("--provider", default=None, type=str, help="Provider override.")
 @click.option("--title", "-t", default=None, help="Set a title immediately.")
-def chat_new(project_name: str | None, model: str | None, provider: str | None, title: str | None) -> None:
+@click.option("--initial-message", "initial_message", default=None, hidden=True,
+              help="Pre-seed the chat with this message (used programmatically).")
+def chat_new(project_name: str | None, model: str | None, provider: str | None, title: str | None, initial_message: str | None = None) -> None:
     """Start a new chat (opens an interactive session)."""
     pname, mname, prov = _resolve_provider(provider, model)
 
@@ -405,7 +412,7 @@ def chat_new(project_name: str | None, model: str | None, provider: str | None, 
         project_id = project.id
 
     chat = database.create_chat(mname, pname, project_id, title)
-    _handle_switch(_run_repl(chat, prov, project=project))
+    _handle_switch(_run_repl(chat, prov, project=project, initial_message=initial_message))
 
 
 @chat_group.command("resume")
