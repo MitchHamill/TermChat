@@ -13,11 +13,16 @@ from termchat.storage.models import Chat, Project
 
 class ChatItem(ListItem):
     def __init__(self, chat: Chat) -> None:
-        label = chat.key or chat.title or f"#{chat.id}"
-        if len(label) > 18:
-            label = label[:17] + "…"
-        super().__init__(Label(label))
+        raw = chat.key or chat.title or f"#{chat.id}"
+        if len(raw) > 18:
+            raw = raw[:17] + "…"
+        self._raw_label = raw
+        super().__init__(Label(f"  {raw}"))  # two-space indent; "✓ " replaces it when selected
         self.chat_id = chat.id
+
+    def set_selected(self, selected: bool) -> None:
+        prefix = "✓ " if selected else "  "
+        self.query_one(Label).update(prefix + self._raw_label)
 
 
 class ProjectItem(ListItem):
@@ -110,9 +115,6 @@ class Sidebar(Widget):
         return None
 
     def set_bulk_selected(self, selected_ids: set[int]) -> None:
-        """Add/remove the bulk-selected CSS class on ChatItems to show selection state."""
+        """Toggle the ✓ prefix on ChatItems to show bulk-selection state."""
         for item in self.query_one(ChatList).query(ChatItem):
-            if item.chat_id in selected_ids:
-                item.add_class("bulk-selected")
-            else:
-                item.remove_class("bulk-selected")
+            item.set_selected(item.chat_id in selected_ids)

@@ -1,11 +1,12 @@
-/* termchat — terminal-native styling: transparent backgrounds, foreground-only colour */
+/* termchat — transparent background everywhere; colour only for text */
 
 Screen {
-    background: $background;
+    background: transparent;
 }
 
 Horizontal {
     height: 1fr;
+    background: transparent;
 }
 
 /* ── Sidebar ─────────────────────────────────────────────────────────────── */
@@ -13,7 +14,7 @@ Horizontal {
 Sidebar {
     width: 22;
     border-right: solid $foreground 20%;
-    background: $background;
+    background: transparent;
 }
 
 #sidebar-title {
@@ -36,24 +37,20 @@ Sidebar {
 
 ChatList, ProjectList {
     height: 1fr;
-    background: $background;
+    background: transparent;
 }
 
+/* Every list row: transparent, no background fill */
 ChatList > ListItem, ProjectList > ListItem {
-    padding: 0 1;
-    background: $background;
+    padding: 0 0;
+    background: transparent;
 }
 
-/* Cursor highlight: colour + bold only, no background fill */
-ChatList > ListItem.--highlight, ProjectList > ListItem.--highlight {
-    background: $background;
+/* Cursor row: bold + accent colour only — no background fill */
+ChatList > ListItem.--highlight,
+ProjectList > ListItem.--highlight {
+    background: transparent;
     color: $accent;
-    text-style: bold;
-}
-
-/* Bulk-selected items */
-ChatItem.bulk-selected > Label {
-    color: $success;
     text-style: bold;
 }
 
@@ -63,13 +60,13 @@ ChatPane {
     width: 1fr;
     height: 1fr;
     layout: vertical;
-    background: $background;
+    background: transparent;
 }
 
 MessageLog {
     height: 1fr;
     padding: 0 1;
-    background: $background;
+    background: transparent;
 }
 
 MessageInput {
@@ -77,22 +74,22 @@ MessageInput {
     max-height: 8;
     padding: 0 1;
     border-top: solid $foreground 15%;
-    background: $background;
+    background: transparent;
 }
 
 /* ── Modals ──────────────────────────────────────────────────────────────── */
 
 ConfirmModal, BulkDeleteModal {
-    background: $background 75%;
+    background: $background 60%;
     align: center middle;
 }
 
 #confirm-dialog {
     width: 44;
     height: auto;
-    border: solid $foreground 50%;
+    border: solid $foreground 60%;
     padding: 1 2;
-    background: $background;
+    background: transparent;
 }
 
 #confirm-message {
