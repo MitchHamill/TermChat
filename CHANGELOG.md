@@ -10,31 +10,43 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
 ### Added
 
-- **Chat keys** — after the first exchange, the AI generates a memorable 2–3 word slug (e.g. `fix-auth`) stored as a unique chat key. Chats can be resumed by key (`termchat chat resume fix-auth`) instead of numeric ID.
-- **Key column in chat list** — the chat list table now displays the key with `overflow="fold"` so long keys wrap rather than being truncated.
-- **Projects** — create named projects with system instructions and attached files; every chat started under a project automatically receives that context.
-- **Context compression** — when a conversation exceeds 50 000 characters, old messages are automatically summarised and replaced by a single summary entry. Manual compression available via `termchat chat compress` or the `/compress` REPL command.
-- **Token tracking** — per-message `input_tokens` and `output_tokens` stored in the database; `termchat chat tokens <id>` and `/tokens` show breakdowns.
-- **In-REPL `/switch`** — jump to another chat by key or ID without leaving the REPL.
-- **In-REPL `/rename`** — rename the current chat or any other chat by reference.
-- **In-REPL `/delete`** — delete the current or another chat with a confirmation prompt.
-- **In-REPL `/chats`** — show the 15 most recent chats without leaving the session.
-- **Unknown `/` command guard** — if a message starts with `/` but is not a recognised command, the REPL asks for confirmation before forwarding it to the AI.
-- **"Not found" list UX** — commands that accept an ID or key (`chat resume`, `chat new --project`, `project show`, `project edit`, etc.) now show the relevant list whenever the lookup fails, rather than exiting with a bare error.
-- **`termchat new` alias** — top-level shortcut for `termchat chat new`.
-- **`tc` CLI alias** — `tc` is registered as an alternative entry point alongside `termchat`.
-- **WAL mode + foreign keys** — the SQLite database runs in WAL journal mode with foreign key constraints enforced.
-- **Automatic database migration** — the `_migrate()` function in `database.py` applies schema changes to existing databases on startup.
+- **Full-screen launcher** — `termchat` now opens a keyboard-driven picker showing all projects and chats in a single unified pane. Projects are collapsible; chats are grouped beneath their project. Orphan chats appear in a separate section below.
+- **AI-generated chat titles** — before the first message is sent, the AI generates a descriptive title (up to ~8 words). Project name and instructions are passed as context so titles reflect the project.
+- **`termchat ask <message>`** — new top-level command that seeds the opening message and drops into the REPL.
+- **Root-level message shortcut** — `termchat "What is a monad?"` works without a subcommand.
+- **Tab / `/menu` to return to launcher** — press Tab or type `/menu` inside any chat to jump back to the launcher without quitting.
+- **Ctrl-C confirmation** — pressing Ctrl-C in a chat now asks "Quit termchat?" before exiting, consistent regardless of entry path.
+- **Persistent bottom toolbar** — the REPL shows a one-line hint bar with all hotkeys at all times.
+- **Project editor** — press `e` on a project in the launcher to open an inline editor for name, instructions, and file attachments.
+- **Project wizard** — press `N` in the launcher to run a guided 3-step wizard (Name → Instructions → Files) that creates a project and opens a chat.
+- **Selected-files sidebar** — the file-picker step of the project wizard shows a live "Selected Files" panel alongside the directory browser.
 
 ### Changed
 
-- `chat resume` now accepts both a numeric ID and a chat key (previously ID only).
-- The Key column in `termchat chat list` wraps rather than truncating.
-- Project "not found" errors in `chat new --project` include the full project list.
+- Chat keys (short AI-generated slugs) replaced by full AI-generated titles. `chat resume` now accepts numeric IDs only.
+- `termchat chat list` shows a **Name** column (AI title or `(untitled)`) instead of a **Key** column.
+- Ctrl-C exit is now consistent: always prompts for confirmation rather than returning to launcher or exiting silently depending on entry path.
 
-### Fixed
+### Security
 
-- `chat resume` used the undefined variable `chat_id` instead of `chat.id` when fetching history to display before entering the REPL.
+- `termchat.db` is now created with `chmod 600` (owner read/write only), matching `config.json`.
+- File browser `_fb_refresh` now catches `OSError` broadly instead of `PermissionError` only, preventing unhandled crashes on removed directories or broken symlinks.
+
+---
+
+## [0.1.0] — Previous release
+
+### Added
+
+- **Chat keys** — after the first exchange, the AI generates a memorable 2–3 word slug (e.g. `fix-auth`) stored as a unique chat key.
+- **Projects** — create named projects with system instructions and attached files; every chat started under a project automatically receives that context.
+- **Context compression** — when a conversation exceeds 50 000 characters, old messages are automatically summarised and replaced by a single summary entry. Manual compression available via `termchat chat compress` or the `/compress` REPL command.
+- **Token tracking** — per-message `input_tokens` and `output_tokens` stored in the database; `termchat chat tokens <id>` and `/tokens` show breakdowns.
+- **In-REPL `/switch`**, **`/rename`**, **`/delete`**, **`/chats`** — chat management without leaving the session.
+- **Unknown `/` command guard** — confirmation prompt before forwarding unrecognised slash-words to the AI.
+- **"Not found" list UX** — failed ID/name lookups show the relevant list rather than a bare error.
+- **`termchat new` alias** and **`tc` entry point**.
+- **WAL mode + foreign keys** — SQLite database with automatic migration on startup.
 
 ---
 

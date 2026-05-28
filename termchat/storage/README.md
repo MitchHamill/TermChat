@@ -43,8 +43,7 @@ class ProjectFile:
 @dataclass
 class Chat:
     id: int
-    key: str | None              # AI-generated slug, e.g. "fix-auth-bug" (max 10 chars)
-    title: str | None            # auto-set from first user message; editable
+    title: str | None            # AI-generated before the first message; editable via /title
     provider: str                # e.g. "anthropic"
     model: str                   # e.g. "claude-sonnet-4-6"
     project_id: int | None       # FK → projects.id (SET NULL on delete)
@@ -99,7 +98,6 @@ CREATE TABLE project_files (
 
 CREATE TABLE chats (
     id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    key         TEXT    UNIQUE,
     title       TEXT,
     provider    TEXT    NOT NULL DEFAULT 'anthropic',
     model       TEXT    NOT NULL,
@@ -120,7 +118,6 @@ CREATE TABLE messages (
 
 CREATE INDEX idx_messages_chat_id ON messages(chat_id);
 CREATE INDEX idx_chats_project_id ON chats(project_id);
-CREATE UNIQUE INDEX idx_chats_key ON chats(key) WHERE key IS NOT NULL;
 ```
 
 ### Design notes
@@ -128,8 +125,9 @@ CREATE UNIQUE INDEX idx_chats_key ON chats(key) WHERE key IS NOT NULL;
 - **WAL mode** — allows concurrent reads while a write is in progress. Suitable for a local single-user tool.
 - **Foreign keys with `ON DELETE CASCADE`** — deleting a chat automatically deletes all its messages; deleting a project automatically deletes its attached files.
 - **`ON DELETE SET NULL`** on `chats.project_id` — deleting a project does not delete the chats that belong to it; they become unattached.
-- **Partial unique index on `chats.key`** — `WHERE key IS NOT NULL` means multiple `NULL` keys are allowed (new chats before the key is generated).
+- **`title` is nullable** — new chats start with `title=NULL`; the AI generates a title before the first message is sent and stores it via `update_chat_title`.
 - **Datetime stored as TEXT** — ISO-8601 strings (`datetime('now')`). `database._dt()` parses them back to `datetime` objects.
+- **File permissions** — `init()` sets `termchat.db` to `chmod 600` after creation so conversation history is only readable by the owning user.
 
 ---
 
@@ -175,12 +173,7 @@ remove_project_file(project_id, filename) -> bool
 ```python
 create_chat(model, provider="anthropic", project_id=None, title=None) -> Chat
 get_chat(chat_id: int) -> Chat | None
-get_chat_by_key(key: str) -> Chat | None
 list_chats(project_id=None, limit=50) -> list[Chat]     # ordered by updated_at DESC
-update_chat_key(chat_id, key) -> str                     # persists and returns the key
-unique_chat_key(base_key) -> str
-    # Returns base_key if unused; otherwise base_key-2, base_key-3, …
-    # Truncates to 10 chars including the numeric suffix.
 update_chat_title(chat_id, title) -> None
 touch_chat(chat_id) -> None                              # updates updated_at
 delete_chat(chat_id) -> bool
@@ -205,12 +198,7 @@ chat_token_totals(chat_id) -> dict[str, int]         # {"input": N, "output": N}
 
 ## Migration system
 
-`_migrate(conn)` is called inside `init()` and applies schema changes that post-date the initial table creation. Currently:
-
-- Adds the `key TEXT` column to `chats` if it doesn't exist (older databases).
-- Creates the partial unique index on `chats.key`.
-
-Each migration is wrapped in `suppress(Exception)` so it is safe to run on a database that already has the change applied.
+`_migrate(conn)` is called inside `init()` and applies schema changes that post-date the initial table creation. Each migration is wrapped in `suppress(Exception)` so it is safe to run on a database that already has the change applied.
 
 ---
 

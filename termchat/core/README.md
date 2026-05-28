@@ -89,17 +89,11 @@ Called after every assistant reply. Checks `total_chars(messages) > CONTEXT_CHAR
 
 Utility predicates — exposed so the CLI can check without calling the full compress path.
 
-### Chat key generation
+### Chat title generation
 
-`generate_chat_key(first_message, provider)` asks the AI to produce a 2–3 word, max-10-char, lowercase-hyphenated slug for a chat based on its opening message.
+`generate_chat_title(first_message, provider, *, project)` asks the AI to produce a concise 4–8 word title in Title Case for a new chat. When a project is supplied, the project name and instructions are passed as supplemental context so the title reflects the project's domain.
 
-The key is sanitised by `_sanitize_key`:
-- Spaces/underscores → hyphens
-- Strip all non-`[a-z0-9-]` characters
-- Collapse consecutive hyphens
-- Truncate to 10 characters
-
-Falls back to a naive `word1-word2` slug derived from the raw text if the API call fails.
+Falls back to the first six words of the raw message if the API call fails.
 
 ---
 

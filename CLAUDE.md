@@ -17,7 +17,10 @@ The `.venv` is already present in the repo root. The package is installed in edi
 ## Running
 
 ```bash
-termchat chat new                        # interactive REPL
+termchat                                         # full-screen launcher
+termchat chat new                                # same — opens launcher
+termchat "What is a monad?"                      # seed opening message, drop into REPL
+termchat ask "Explain Rust lifetimes"            # explicit ask command
 termchat chat new --model claude-opus-4-7
 termchat chat list
 TERMCHAT_CONFIG_DIR=/tmp/tc termchat chat new   # isolated test environment
@@ -41,9 +44,12 @@ The codebase has three layers that compose through clear interfaces:
 - `chat.py` — the orchestration entry point: persists the user turn, builds context, streams the provider response, persists the assistant turn, auto-sets the chat title from the first message, then calls `maybe_auto_compress`.
 
 ### CLI (`termchat/cli/`)
-- `main.py` — root Click group; calls `database.init()` on every invocation; registers the three sub-groups (`chat`, `project`, `config`) and a top-level `termchat new` alias.
-- `chat_commands.py` — `chat new` creates a DB row then hands off to `_run_repl`; `chat resume` loads history before entering the REPL. The REPL uses `prompt_toolkit` for input and Rich panels/Live for output.
-- `project_commands.py` — CRUD for projects and their attached files.
+- `main.py` — root Click group; calls `database.init()` on every invocation; registers sub-groups (`chat`, `project`, `config`), top-level aliases (`new`, `ask`), and a catch-all that treats bare positional args as an opening message.
+- `chat_commands.py` — `chat new` opens the launcher; `chat resume` loads history before entering the REPL. The REPL uses `prompt_toolkit` with a persistent toolbar, Tab-to-launcher, and Ctrl-C quit confirmation.
+- `launcher.py` — full-screen prompt_toolkit `Application`; single unified pane with collapsible project groups and orphan chats below; returns action tuples to `_run_launcher`.
+- `project_wizard.py` — 3-step guided wizard (Name → Instructions → Files) for creating a project from the launcher.
+- `project_editor.py` — inline editor for updating a project's name, instructions, and file attachments.
+- `project_commands.py` — CRUD for projects and their attached files (CLI commands).
 - `config_commands.py` — `termchat setup` and `termchat config`.
 - `formatting.py` — all Rich rendering helpers (shared console, `render_message`, `render_chat_list`, etc.).
 

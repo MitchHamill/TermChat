@@ -6,8 +6,9 @@
 
 ## Features
 
-- **Persistent chat history** — every conversation is stored locally in SQLite; resume any chat by name or ID
-- **Short chat keys** — after your first message, the AI generates a memorable slug (e.g. `fix-auth`) so you never need to remember numeric IDs
+- **Persistent chat history** — every conversation is stored locally in SQLite; resume any chat by numeric ID
+- **AI-generated chat titles** — before your first message is sent, the AI generates a descriptive title so you can find chats at a glance
+- **Full-screen launcher** — a keyboard-driven picker shows all projects and chats in one pane; projects are collapsible and chats are grouped beneath them
 - **Projects** — attach system instructions and files to a project; every chat under that project automatically receives them as context
 - **Token tracking** — per-message input/output counts and session totals
 - **Auto-compression** — when a conversation grows past 50 000 characters, old messages are automatically summarised so the context window stays manageable
@@ -91,15 +92,16 @@ termchat --help
 ## Quick start
 
 ```bash
-termchat setup                          # one-time key setup
-termchat chat new                       # open a new conversation
+termchat setup                              # one-time key setup
+termchat                                    # open the launcher (chat + project picker)
+termchat "What is a monad?"                 # start a chat with an opening message
+termchat ask "Explain Rust lifetimes"       # same, explicit command
 termchat chat new --model claude-opus-4-7
-termchat chat list                      # browse history
-termchat chat resume fix-auth           # resume a chat by key
-termchat chat resume 3                  # or by numeric ID
+termchat chat list                          # browse history
+termchat chat resume 3                      # resume a chat by numeric ID
 ```
 
-Both `termchat chat new` and `termchat new` (alias) open the interactive REPL.
+`termchat`, `termchat chat new`, and `termchat new` (alias) all open the interactive launcher.
 
 ---
 
@@ -126,18 +128,27 @@ termchat chat new --project myapp --title "Sprint planning"
 
 If a project name or ID is not found, the full project list is shown so you can pick the right one.
 
-### `termchat chat resume <ref>`
+### `termchat ask <message>`
 
-Resume a previous chat. `<ref>` can be:
-- A **key** (short AI-generated slug, e.g. `fix-auth`)
-- A **numeric ID** (e.g. `3`)
+Start a new chat with a pre-seeded opening message, then drop into the REPL.
 
 ```bash
-termchat chat resume fix-auth
+termchat ask "What is a monad?"
+termchat ask "Explain Rust lifetimes" --model claude-opus-4-7
+termchat ask "hello" --project myapp
+```
+
+Equivalent to `termchat "message"` at the root level.
+
+### `termchat chat resume <id>`
+
+Resume a previous chat by numeric ID.
+
+```bash
 termchat chat resume 3
 ```
 
-Previous messages are printed before the prompt opens. If the ref is not found, the recent chat list is shown.
+Previous messages are printed before the prompt opens. If the ID is not found, the recent chat list is shown.
 
 ### `termchat chat list`
 
@@ -186,21 +197,24 @@ Options:
 
 While inside a chat session, anything starting with `/` is treated as a command. If you type a `/`-prefixed word that isn't recognised, termchat will ask **"'/<word>' isn't a command — send to AI? [y/N]"** before forwarding it, so typos don't accidentally pollute the conversation.
 
-| Command              | Effect                                                |
-|----------------------|-------------------------------------------------------|
-| `/help`              | Show the command reference                            |
-| `/history`           | Browse the full conversation in a pager               |
-| `/tokens`            | Show token counts for this chat                       |
-| `/compress`          | Force-compress old messages into a summary            |
-| `/title TEXT`        | Set or update the chat title                          |
-| `/clear`             | Clear the terminal screen                             |
-| `/chats`             | List the 15 most recent chats                         |
-| `/switch KEY_OR_ID`  | Switch to another chat without leaving the REPL       |
-| `/rename [REF] TEXT` | Rename this chat, or another chat by key/id           |
-| `/delete [REF]`      | Delete this chat (exits) or another chat by key/id    |
-| `/quit` / `/exit`    | Exit the session (also Ctrl-D)                        |
+| Command            | Effect                                                  |
+|--------------------|---------------------------------------------------------|
+| `/help`            | Show the command reference                              |
+| `/history`         | Browse the full conversation in a pager                 |
+| `/tokens`          | Show token counts for this chat                         |
+| `/compress`        | Force-compress old messages into a summary              |
+| `/title TEXT`      | Set or update the chat title                            |
+| `/clear`           | Clear the terminal screen                               |
+| `/chats`           | List the 15 most recent chats                           |
+| `/switch ID`       | Switch to another chat without leaving the REPL         |
+| `/rename [ID] TEXT`| Rename this chat, or another chat by numeric ID         |
+| `/delete [ID]`     | Delete this chat (exits) or another chat by numeric ID  |
+| `/menu`            | Return to the launcher (also **Tab**)                   |
+| `/quit` / `/exit`  | Quit termchat (also **Ctrl-C** with confirmation)       |
 
 **Multi-line input:** press **Alt-Enter** (Esc then Enter) to insert a newline without submitting. Plain Enter always sends.
+
+**Navigation hotkeys** are shown in a persistent toolbar at the bottom of the prompt.
 
 ---
 
@@ -427,13 +441,16 @@ termchat/
     │   ├── README.md               ← CLI layer docs
     │   ├── main.py                 ← Click root group + DB init
     │   ├── chat_commands.py        ← `chat` sub-group + interactive REPL
+    │   ├── launcher.py             ← full-screen chat/project picker (prompt_toolkit)
+    │   ├── project_wizard.py       ← 3-step new-project wizard (prompt_toolkit)
+    │   ├── project_editor.py       ← inline project editor (prompt_toolkit)
     │   ├── project_commands.py     ← `project` sub-group
     │   ├── config_commands.py      ← `setup` and `config` commands
-    │   └── formatting.py          ← all Rich rendering helpers
+    │   └── formatting.py           ← all Rich rendering helpers
     ├── core/
     │   ├── README.md               ← core layer docs
     │   ├── chat.py                 ← orchestration (send_message)
-    │   ├── context.py              ← system prompt builder + compression
+    │   ├── context.py              ← system prompt builder + compression + title gen
     │   └── providers/
     │       ├── README.md           ← provider contract + how to add one
     │       ├── base.py             ← BaseProvider ABC + CompletionResult
