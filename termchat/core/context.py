@@ -8,8 +8,6 @@ Responsibilities:
 
 from __future__ import annotations
 
-import re
-
 from termchat import config
 from termchat.core.providers.base import BaseProvider, CompletionResult
 from termchat.storage import database
@@ -156,49 +154,43 @@ def maybe_auto_compress(
     return compress_chat(chat_id, provider)
 
 
-# ── Chat key generation ───────────────────────────────────────────────────────
+# ── Chat title generation ─────────────────────────────────────────────────────
 
-_KEY_SYSTEM = """\
-You generate ultra-short chat identifiers.
-Given the opening message of a conversation, output a 2-3 word lowercase hyphenated slug.
+_TITLE_SYSTEM = """\
+You generate short, descriptive chat titles.
+Given the opening message of a conversation, output a concise title (4-8 words).
 
 Rules (strict):
-- Lowercase letters and hyphens only — no other characters
-- 10 characters maximum total (including hyphens)
-- 2-3 words; capture the specific topic
-- Avoid generic filler words like "help", "question", "chat", "talk"
-- Reply with ONLY the slug — no explanation, no punctuation, no quotes
+- Title case (capitalize major words)
+- No punctuation at the end
+- Capture the specific topic or task
+- Avoid generic filler like "Help With" or "Question About"
+- Reply with ONLY the title — no explanation, no quotes
 """
 
 
-def _sanitize_key(raw: str) -> str:
-    """Normalize AI output to a clean lowercase-hyphenated slug, max 10 chars."""
-    lines = raw.strip().lower().splitlines()
-    key = lines[0] if lines else ""
-    key = re.sub(r"[\s_]+", "-", key)            # spaces/underscores → hyphens
-    key = re.sub(r"[^a-z0-9-]", "", key)         # strip everything else
-    key = re.sub(r"-{2,}", "-", key)              # collapse consecutive hyphens
-    key = key.strip("-")[:10].rstrip("-")         # truncate then trim trailing hyphen
-    return key
+def generate_chat_title(first_message: str, provider: BaseProvider, *, project: Project | None = None) -> str:
+    """Ask the provider to produce a descriptive title for a chat's first message.
 
-
-def generate_chat_key(first_message: str, provider: BaseProvider) -> str:
-    """Ask the provider to produce a short slug for a chat's first message.
-
-    Falls back to a slug derived from the raw text if the call fails or returns
-    an unusable result.
+    Falls back to a title derived from the raw text if the call fails.
     """
+    content = f"Opening message: {first_message[:400]}"
+    if project:
+        ctx_lines = [f"Project name: {project.name}"]
+        if project.instructions:
+            ctx_lines.append(f"Project instructions: {project.instructions[:300]}")
+        content += "\n\nThis was sent as part of a project. Project context below:\n" + "\n".join(ctx_lines)
     try:
         result = provider.complete(
-            messages=[{"role": "user", "content": f"Opening message: {first_message[:300]}"}],
-            system=_KEY_SYSTEM,
-            max_tokens=20,
+            messages=[{"role": "user", "content": content}],
+            system=_TITLE_SYSTEM,
+            max_tokens=30,
         )
-        key = _sanitize_key(result.content)
-        if key:
-            return key
+        title = result.content.strip().strip('"').strip("'")
+        if title:
+            return title
     except Exception:
         pass
-    # Fallback: derive a slug from the raw message text
-    words = re.sub(r"[^a-z0-9\s]", "", first_message.lower()).split()
-    return ("-".join(words[:2]))[:10] or "chat"
+    # Fallback: capitalize the first few words of the message
+    words = first_message.split()
+    return " ".join(words[:6]) or "New Chat"

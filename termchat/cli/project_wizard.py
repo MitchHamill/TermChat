@@ -12,12 +12,13 @@ from prompt_toolkit.buffer import Buffer
 from prompt_toolkit.filters import Condition
 from prompt_toolkit.formatted_text import StyleAndTextTuples
 from prompt_toolkit.key_binding import KeyBindings
-from prompt_toolkit.layout import ConditionalContainer, HSplit, Layout, Window
+from prompt_toolkit.layout import ConditionalContainer, HSplit, Layout, VSplit, Window
 from prompt_toolkit.layout.controls import BufferControl, FormattedTextControl
+from prompt_toolkit.layout.dimension import D
 
 from termchat.storage import database
 from termchat.storage.models import Project
-from termchat.tui.launcher import _SEP, _STYLE
+from termchat.cli.launcher import _SEP, _STYLE
 
 
 class ProjectWizard:
@@ -51,8 +52,8 @@ class ProjectWizard:
         """Rebuild file-browser entries for the current directory."""
         try:
             all_entries = sorted(self._fb_cwd.iterdir())
-        except PermissionError:
-            self._error = f"Permission denied: {self._fb_cwd}"
+        except OSError as exc:
+            self._error = str(exc)
             return
         visible = [e for e in all_entries if not e.name.startswith(".")]
         dirs  = [e for e in visible if e.is_dir()]
@@ -131,6 +132,22 @@ class ProjectWizard:
             ]
         return lines
 
+    def _sidebar_text(self) -> StyleAndTextTuples:
+        n = len(self._fb_selected)
+        lines: StyleAndTextTuples = [
+            ("class:tab-on", "  Selected Files"),
+            ("class:dim", f" ({n})\n" if n else " (0)\n"),
+            ("class:sep", f"  {'─' * 20}\n"),
+        ]
+        if not self._fb_selected:
+            lines.append(("class:dim", "  (none)\n"))
+        else:
+            ordered = sorted(self._fb_selected, key=lambda p: p.name)
+            labels = _disambiguate(ordered)
+            for path in ordered:
+                lines.append(("", f"  {labels[path]}\n"))
+        return lines
+
     def _footer_text(self) -> StyleAndTextTuples:
         lines: StyleAndTextTuples = []
         if self._error:
@@ -165,7 +182,16 @@ class ProjectWizard:
     def _build_layout(self) -> Layout:
         self._files_window = Window(
             content=FormattedTextControl(self._files_body, focusable=True),
+            width=D(weight=3),
         )
+        files_split = VSplit([
+            self._files_window,
+            Window(width=1, char="│", style="class:sep"),
+            Window(
+                content=FormattedTextControl(self._sidebar_text),
+                width=D(weight=2),
+            ),
+        ])
         return Layout(
             HSplit([
                 Window(content=FormattedTextControl(self._header_text), height=4),
@@ -178,7 +204,7 @@ class ProjectWizard:
                     filter=Condition(lambda: self.step == "instructions"),
                 ),
                 ConditionalContainer(
-                    self._files_window,
+                    files_split,
                     filter=Condition(lambda: self.step == "files"),
                 ),
                 Window(content=FormattedTextControl(self._footer_text), height=2),
@@ -333,7 +359,8 @@ class ProjectWizard:
                 skipped += 1
 
         self._skipped_count = skipped
-        self.result = project
+        # Re-fetch so project.files is populated before the REPL uses it
+        self.result = database.get_project(project.id)
         app.exit()
 
     # ── Run ──────────────────────────────────────────────────────────────────
@@ -358,3 +385,15 @@ class ProjectWizard:
             warn(f"{self._skipped_count} file(s) could not be read and were skipped.")
 
         return self.result
+
+
+# ── Helpers ───────────────────────────────────────────────────────────────────
+
+def _disambiguate(paths: list[Path]) -> dict[Path, str]:
+    """Return display labels; show parent/name when two paths share a filename."""
+    from collections import Counter
+    counts = Counter(p.name for p in paths)
+    return {
+        p: (f"{p.parent.name}/{p.name}" if counts[p.name] > 1 else p.name)
+        for p in paths
+    }

@@ -28,7 +28,6 @@ class ProjectFile:
 @dataclass
 class Chat:
     id: int
-    key: str | None          # short AI-generated slug, e.g. "fix-auth-bug"
     title: str | None
     provider: str
     model: str

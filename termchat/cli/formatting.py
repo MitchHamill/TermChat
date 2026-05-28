@@ -6,7 +6,7 @@ from datetime import datetime
 
 from rich.console import Console
 from rich.markdown import Markdown
-from rich.panel import Panel
+from rich.rule import Rule
 from rich.table import Column, Table
 from rich.text import Text
 from rich import box
@@ -33,36 +33,19 @@ def token_badge(input_tokens: int | None, output_tokens: int | None) -> Text:
 
 def render_message(msg: Message, *, markdown: bool = True) -> None:
     if msg.role == "user":
-        panel = Panel(
-            msg.content,
-            title="[bold blue]You[/]",
-            border_style="blue",
-            title_align="left",
-            padding=(0, 1),
-        )
-        console.print(panel)
+        console.print(Rule("[bold blue]You[/]", align="left", style="blue dim"))
+        console.print(msg.content)
+        console.print()
     elif msg.role == "assistant":
+        console.print(Rule("[bold green]Claude[/]", align="left", style="green dim"))
         body = Markdown(msg.content) if markdown else msg.content
-        footer = token_badge(msg.input_tokens, msg.output_tokens)
-        panel = Panel(
-            body,
-            title="[bold green]Claude[/]",
-            subtitle=footer,
-            border_style="green",
-            title_align="left",
-            subtitle_align="right",
-            padding=(0, 1),
-        )
-        console.print(panel)
+        console.print(body)
+        console.print(token_badge(msg.input_tokens, msg.output_tokens), justify="right")
+        console.print()
     elif msg.role == "summary":
-        panel = Panel(
-            f"[italic dim]{msg.content}[/]",
-            title="[yellow]📋 Conversation Summary[/]",
-            border_style="yellow dim",
-            title_align="left",
-            padding=(0, 1),
-        )
-        console.print(panel)
+        console.print(Rule("[yellow dim]Summary[/]", align="left", style="yellow dim"))
+        console.print(f"[italic dim]{msg.content}[/]")
+        console.print()
 
 
 # ── Chat list ─────────────────────────────────────────────────────────────────
@@ -78,18 +61,17 @@ def render_chat_list(
         return
 
     table = Table(
-        Column(""), Column("Key", overflow="fold"), "Title", "Project", "Model", "Updated",
+        Column(""), Column("ID", style="dim"), Column("Name", overflow="fold"), "Project", "Model", "Updated",
         box=box.ROUNDED,
         show_header=True,
         header_style="bold",
     )
     for c in chats:
         marker = "[green]●[/]" if c.id == current_id else ""
-        key_cell = f"[bold]{c.key}[/]" if c.key else f"[dim]#{c.id}[/]"
-        title = c.title or "[dim]—[/]"
+        name = f"[bold]{c.title}[/]" if c.title else "[dim](untitled)[/]"
         proj = projects.get(c.project_id or 0, "—")
         updated = _format_dt(c.updated_at)
-        table.add_row(marker, key_cell, title, proj, c.model, updated)
+        table.add_row(marker, str(c.id), name, proj, c.model, updated)
 
     console.print(table)
 
