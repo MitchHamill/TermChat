@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import typing as t
 
 import click
@@ -13,6 +14,13 @@ from termchat.storage import database
 def _init_db() -> None:
     cfg.ensure_config_dir()
     database.init(cfg.DB_FILE)
+
+
+def _set_terminal_title(title: str) -> None:
+    """Set the terminal window/tab title via OSC escape sequence."""
+    if sys.stderr.isatty():
+        sys.stderr.write(f"\033]0;{title}\007")
+        sys.stderr.flush()
 
 
 # ── Root group ────────────────────────────────────────────────────────────────
@@ -54,6 +62,7 @@ def cli(ctx: click.Context, project_name: str | None, model: str | None, provide
       termchat chat list          List previous chats
       termchat project new NAME   Create a project with custom instructions
     """
+    _set_terminal_title("termchat")
     _init_db()
     if ctx.invoked_subcommand is None:
         from termchat.cli.chat_commands import chat_new

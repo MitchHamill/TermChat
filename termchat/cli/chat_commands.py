@@ -35,11 +35,11 @@ from termchat.storage.models import Chat, Message
 
 
 def _resolve_chat_ref(ref: str) -> Chat | None:
-    """Accept either a numeric ID or a chat key and return the Chat."""
+    """Accept a numeric ID and return the Chat."""
     try:
         return database.get_chat(int(ref))
     except ValueError:
-        return database.get_chat_by_key(ref)
+        return None
 
 
 def _show_chat_list(*, current_id: int | None = None) -> None:
@@ -61,10 +61,11 @@ _REPL_HELP = """\
   [cyan]/title[/] TEXT          — set a title for this chat
   [cyan]/clear[/]               — clear the terminal
   [cyan]/chats[/]               — list recent chats
-  [cyan]/switch[/] ID           — switch to another chat by ID
-  [cyan]/rename[/] [ID] TEXT    — rename this chat, or another chat by ID
-  [cyan]/delete[/] [ID]         — delete this chat (exits) or another chat by ID
-  [cyan]/quit[/]                — exit the chat (also: /exit, Ctrl-D)
+  [cyan]/switch[/] ID           — switch to another chat by numeric ID
+  [cyan]/rename[/] [ID] TEXT    — rename this chat, or another chat by numeric ID
+  [cyan]/delete[/] [ID]         — delete this chat (exits) or another chat by numeric ID
+  [cyan]/menu[/]                — return to the chat selection screen (also: Tab)
+  [cyan]/quit[/]                — quit termchat (also: /exit, Ctrl-C, Ctrl-D)
 
 [dim]Alt-Enter (Esc then Enter) inserts a new line without sending.[/]
 """
@@ -72,8 +73,12 @@ _REPL_HELP = """\
 _REPL_COMMANDS = {
     "/help", "/history", "/tokens", "/compress", "/title", "/clear",
     "/chats", "/switch", "/rename", "/delete",
-    "/quit", "/exit",
+    "/menu", "/quit", "/exit",
 }
+
+_TOOLBAR = (
+    " [Tab] launcher   [/help] commands   [Ctrl-C] quit   [Alt-Enter] newline "
+)
 
 # ── Input: prompt strings & key bindings ─────────────────────────────────────
 
@@ -81,13 +86,12 @@ _PROMPT = "You › "
 _PROMPT_CONT = " " * len(_PROMPT)   # aligns continuation lines under the first
 
 
-def _make_keybindings() -> KeyBindings:
-    """Enter submits; Alt/Meta+Enter inserts a newline.
+class _MenuRequest(Exception):
+    """Raised by the Tab key binding to signal a return to the launcher."""
 
-    Most terminal emulators cannot distinguish Shift+Enter from plain Enter at
-    the escape-sequence level.  Alt+Enter (escape + enter) is the universally
-    reliable way to insert a newline without submitting.
-    """
+
+def _make_keybindings() -> KeyBindings:
+    """Enter submits; Alt/Meta+Enter inserts a newline; Tab returns to launcher."""
     kb = KeyBindings()
 
     @kb.add("enter", eager=True)
@@ -97,6 +101,10 @@ def _make_keybindings() -> KeyBindings:
     @kb.add("escape", "enter")
     def _newline(event) -> None:
         event.current_buffer.insert_text("\n")
+
+    @kb.add("tab")
+    def _go_to_menu(event) -> None:
+        event.app.exit(exception=_MenuRequest())
 
     return kb
 
@@ -121,32 +129,44 @@ def _resolve_provider(provider_name: str | None, model: str | None) -> tuple[str
 
 # ── REPL loop ─────────────────────────────────────────────────────────────────
 
-def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = None) -> int | None:
+def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = None) -> int | str | None:
     """Interactive REPL for a chat session.
 
-    Returns a chat ID if the user issued /switch, otherwise None.
+    Returns:
+      int   — chat ID to switch to (/switch command)
+      "menu" — user wants to return to the launcher
+      None  — session ended (caller should exit or return to launcher)
     """
     session: PromptSession = PromptSession(
         history=InMemoryHistory(),
         key_bindings=_KB,
         multiline=True,
         prompt_continuation=lambda _w, _ln, _sw: _PROMPT_CONT,
+        bottom_toolbar=_TOOLBAR,
     )
 
-    chat_label = chat.key or f"#{chat.id}"
-    console.print(Rule(f"[bold]{chat_label}[/]  [dim]{chat.model}[/]"))
-    if project:
-        console.print(f"[dim]Project: [bold]{project.name}[/][/]")
-    console.print(
-        "[dim]Type a message and press Enter. "
-        "[bold]/help[/] for in-chat commands · "
-        "Alt-Enter for a new line · "
-        "Ctrl-D or [bold]/quit[/] to exit · "
-        "[bold]tc -h[/] for all commands.[/]\n"
-    )
-
-    # Pre-seed: send the initial message before entering the loop
     _initial_message = (initial_message or "").strip() or None
+
+    _HINT = "[dim]Type a message and press Enter · [bold]/help[/] for commands · [bold]Tab[/] to go back[/]"
+
+    def _print_header() -> None:
+        label = chat.title or f"#{chat.id}"
+        console.print(Rule(f"[bold]{label}[/]  [dim]{chat.model}[/]"))
+        if project:
+            console.print(f"[dim]Project: [bold]{project.name}[/][/]")
+        console.print(_HINT + "\n")
+
+    def _erase_prompt(text: str) -> None:
+        """Remove the prompt_toolkit echo from the terminal before re-rendering."""
+        import math
+        import shutil
+        cols = shutil.get_terminal_size().columns or 80
+        rows = 0
+        for i, part in enumerate(text.split("\n")):
+            prefix = len(_PROMPT) if i == 0 else len(_PROMPT_CONT)
+            rows += max(1, math.ceil((prefix + len(part)) / cols))
+        sys.stdout.write(f"\033[{rows}A\033[J")
+        sys.stdout.flush()
 
     # ── AI turn helper (closure over chat, provider, project) ─────────────
     def _do_ai_turn(user_input: str) -> bool:
@@ -154,13 +174,9 @@ def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = 
 
         Returns True on success, False on API error (caller should continue).
         """
-        console.print(Panel(
-            user_input,
-            title="[bold blue]You[/]",
-            border_style="blue",
-            title_align="left",
-            padding=(0, 1),
-        ))
+        console.print(Rule("[bold blue]You[/]", align="left", style="blue dim"))
+        console.print(user_input)
+        console.print()
 
         with console.status("[green]Thinking…[/]", spinner="dots"):
             try:
@@ -182,29 +198,83 @@ def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = 
                 "[yellow dim]⚡ Context auto-compressed (50 k char limit reached).[/]"
             )
 
-        if chat.key is None:
-            with console.status("[dim]Naming chat…[/]"):
-                raw = ctx.generate_chat_key(user_input, provider)
-                chat.key = database.update_chat_key(
-                    chat.id, database.unique_chat_key(raw)
-                )
-            console.print(Rule(f"[bold]{chat.key}[/]  [dim]{chat.model}[/]"))
-
         return True
 
-    if _initial_message:
-        _do_ai_turn(_initial_message)
+    # ── New chat: collect first message, name it, then show a clean header ────
+    if not chat.title:
+        if _initial_message is not None:
+            first_input = _initial_message
+            _initial_message = None
+        else:
+            console.print(_HINT + "\n")
+            first_input = None
+            while first_input is None:
+                try:
+                    raw = session.prompt(_PROMPT).strip()
+                except _MenuRequest:
+                    return "menu"
+                except KeyboardInterrupt:
+                    console.print()
+                    try:
+                        confirmed = click.confirm("  Quit termchat?", default=False)
+                    except click.Abort:
+                        confirmed = False
+                    if confirmed:
+                        console.print("[dim]Goodbye.[/]")
+                        sys.exit(0)
+                    continue
+                except EOFError:
+                    console.print("\n[dim]Goodbye.[/]")
+                    sys.exit(0)
+                if not raw:
+                    continue
+                _erase_prompt(raw)
+                if raw.lower() in ("/quit", "/exit"):
+                    console.print("[dim]Goodbye.[/]")
+                    sys.exit(0)
+                if raw.lower() == "/menu":
+                    return "menu"
+                first_input = raw
+
+        with console.status("[dim]Starting chat…[/]"):
+            title = ctx.generate_chat_title(first_input, provider, project=project)
+            database.update_chat_title(chat.id, title)
+            chat.title = title
+
+        console.clear()
+        _print_header()
+        _do_ai_turn(first_input)
+
+    else:
+        # Resumed chat — header goes at the very top
+        _print_header()
+        if _initial_message:
+            _do_ai_turn(_initial_message)
 
     while True:
         # ── Prompt ────────────────────────────────────────────────────────────
         try:
             user_input = session.prompt(_PROMPT).strip()
-        except (KeyboardInterrupt, EOFError):
+        except _MenuRequest:
+            return "menu"
+        except KeyboardInterrupt:
+            console.print()
+            try:
+                confirmed = click.confirm("  Quit termchat?", default=False)
+            except click.Abort:
+                confirmed = False
+            if confirmed:
+                console.print("[dim]Goodbye.[/]")
+                sys.exit(0)
+            continue
+        except EOFError:
             console.print("\n[dim]Goodbye.[/]")
-            break
+            sys.exit(0)
 
         if not user_input:
             continue
+
+        _erase_prompt(user_input)
 
         # ── REPL commands ──────────────────────────────────────────────────────
         cmd, _, rest = user_input.partition(" ")
@@ -212,7 +282,10 @@ def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = 
 
         if cmd in ("/quit", "/exit"):
             console.print("[dim]Goodbye.[/]")
-            break
+            sys.exit(0)
+
+        if cmd == "/menu":
+            return "menu"
 
         if cmd == "/help":
             console.print(_REPL_HELP)
@@ -268,7 +341,7 @@ def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = 
         if cmd == "/switch":
             arg = rest.strip()
             if not arg:
-                warn("Usage: /switch <key or id>")
+                warn("Usage: /switch <id>")
                 continue
             target = _resolve_chat_ref(arg)
             if target is None:
@@ -278,7 +351,7 @@ def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = 
             if target.id == chat.id:
                 warn("Already in this chat.")
                 continue
-            label = target.key or f"#{target.id}"
+            label = target.title or f"#{target.id}"
             console.print(f"[dim]Switching to {label}…[/]")
             return target.id
 
@@ -302,7 +375,7 @@ def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = 
             database.update_chat_title(target_chat.id, new_title)
             if target_chat.id == chat.id:
                 chat.title = new_title
-            label = target_chat.key or f"#{target_chat.id}"
+            label = target_chat.title or f"#{target_chat.id}"
             success(f"'{label}' renamed to '{new_title}'.")
             continue
 
@@ -315,7 +388,7 @@ def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = 
                     continue
             else:
                 target_chat = chat
-            label = target_chat.key or f"#{target_chat.id}"
+            label = target_chat.title or f"#{target_chat.id}"
             try:
                 confirmed = click.confirm(f"  Delete '{label}'?", default=False)
             except click.Abort:
@@ -326,8 +399,7 @@ def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = 
             database.delete_chat(target_chat.id)
             success(f"'{label}' deleted.")
             if target_chat.id == chat.id:
-                console.print("[dim]Current chat deleted. Goodbye.[/]")
-                return None
+                return "menu"
             continue
 
         # ── Unknown slash-command guard ────────────────────────────────────────
@@ -351,13 +423,16 @@ def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = 
 
 # ── Switch helper ─────────────────────────────────────────────────────────────
 
-def _handle_switch(next_id: int | None) -> None:
-    """Loop through /switch requests until the user exits normally."""
-    while next_id is not None:
+def _handle_switch(next_id) -> str | None:
+    """Loop through /switch requests until the user exits or goes to menu.
+
+    Returns "menu" if the user issued /menu, None otherwise.
+    """
+    while isinstance(next_id, int):
         target_chat = database.get_chat(next_id)
         if target_chat is None:
             error(f"Chat '{next_id}' not found.")
-            return
+            return None
         project = database.get_project(target_chat.project_id) if target_chat.project_id else None
         _, _, prov = _resolve_provider(target_chat.provider, target_chat.model)
 
@@ -370,6 +445,61 @@ def _handle_switch(next_id: int | None) -> None:
             console.print()
 
         next_id = _run_repl(target_chat, prov, project=project)
+
+    return next_id  # "menu" or None
+
+
+# ── Launcher ──────────────────────────────────────────────────────────────────
+
+def _run_launcher(pname: str, mname: str, prov) -> None:
+    """Show the full-screen chat/project picker and loop until the user quits."""
+    from termchat.cli.launcher import Launcher
+
+    while True:
+        chats = database.list_chats(limit=50)
+        projects = database.list_projects()
+
+        action, item = Launcher(chats, projects).run()
+
+        if action == "quit":
+            break
+
+        elif action == "new_chat":
+            chat = database.create_chat(mname, pname)
+            _handle_switch(_run_repl(chat, prov))
+            # After REPL exits, loop back to launcher
+
+        elif action == "new_project":
+            from termchat.cli.project_wizard import ProjectWizard
+            project = ProjectWizard().run()
+            if project:
+                chat = database.create_chat(mname, pname, project.id)
+                _handle_switch(_run_repl(chat, prov, project=project))
+            # project is None → wizard was cancelled; outer while loop re-shows launcher
+
+        elif action == "open_chat":
+            chat = item
+            _, _, chat_prov = _resolve_provider(chat.provider, chat.model)
+            project = database.get_project(chat.project_id) if chat.project_id else None
+            messages = database.get_messages(chat.id)
+            if messages:
+                console.print(Rule("[dim]Previous messages[/]"))
+                for msg in messages:
+                    render_message(msg)
+                console.print()
+            _handle_switch(_run_repl(chat, chat_prov, project=project))
+
+        elif action == "edit_project":
+            from termchat.cli.project_editor import ProjectEditor
+            ProjectEditor(item).run()
+            # DB updated inside editor; outer loop re-shows launcher with fresh data
+
+        elif action == "open_project":
+            project = database.get_project(item.id)  # fetch with files populated
+            chat = database.create_chat(mname, pname, project.id)
+            _handle_switch(_run_repl(chat, prov, project=project))
+
+        # delete_chat is handled entirely inside the launcher (no terminal drop-out)
 
 
 # ── Commands ──────────────────────────────────────────────────────────────────
@@ -411,15 +541,21 @@ def chat_new(project_name: str | None, model: str | None, provider: str | None, 
             raise click.Abort()
         project_id = project.id
 
-    chat = database.create_chat(mname, pname, project_id, title)
-    _handle_switch(_run_repl(chat, prov, project=project, initial_message=initial_message))
+    if initial_message:
+        # Non-interactive path (termchat ask "...") — skip launcher
+        chat = database.create_chat(mname, pname, project_id, title)
+        _handle_switch(_run_repl(chat, prov, project=project, initial_message=initial_message))
+        return
+
+    # Interactive path — show the launcher first
+    _run_launcher(pname, mname, prov)
 
 
 @chat_group.command("resume")
 @click.argument("chat_ref")
 @click.option("--model", "-m", default=None, help="Model override.")
 def chat_resume(chat_ref: str, model: str | None) -> None:
-    """Resume an existing chat by key or numeric ID."""
+    """Resume an existing chat by numeric ID."""
     chat = _resolve_chat_ref(chat_ref)
     if chat is None:
         error(f"Chat '{chat_ref}' not found.")
@@ -471,13 +607,12 @@ def chat_show(chat_id: int, no_markdown: bool) -> None:
         p = database.get_project(chat.project_id)
         proj_name = p.name if p else "—"
 
-    chat_label = chat.key or f"#{chat.id}"
     with console.pager(styles=True):
         console.print(Panel(
             f"[bold]{chat.title or '(untitled)'}[/]\n"
             f"[dim]Model: {chat.model}  •  Project: {proj_name}  •  "
             f"Created: {_format_dt(chat.created_at)}[/]",
-            title=chat_label,
+            title=f"#{chat.id}",
             border_style="blue",
         ))
 

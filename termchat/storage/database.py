@@ -7,6 +7,7 @@ no SQL leaks outside this module.
 from __future__ import annotations
 
 import sqlite3
+import stat
 from contextlib import contextmanager, suppress
 from datetime import datetime
 from pathlib import Path
@@ -75,16 +76,19 @@ def init(path: Path) -> None:
     with _connect() as conn:
         conn.executescript(_SCHEMA)
         _migrate(conn)
+    # Restrict to owner read/write only — DB contains conversation history
+    with suppress(OSError):
+        path.chmod(stat.S_IRUSR | stat.S_IWUSR)
 
 
 def _migrate(conn: sqlite3.Connection) -> None:
     """Apply schema changes that post-date the initial table creation."""
-    # Add the 'key' column to existing databases that don't have it yet.
     with suppress(Exception):
         conn.execute("ALTER TABLE chats ADD COLUMN key TEXT")
-    conn.execute(
-        "CREATE UNIQUE INDEX IF NOT EXISTS idx_chats_key ON chats(key) WHERE key IS NOT NULL"
-    )
+    with suppress(Exception):
+        conn.execute(
+            "CREATE UNIQUE INDEX IF NOT EXISTS idx_chats_key ON chats(key) WHERE key IS NOT NULL"
+        )
 
 
 @contextmanager
@@ -136,10 +140,8 @@ def _row_to_file(row: sqlite3.Row) -> ProjectFile:
 
 
 def _row_to_chat(row: sqlite3.Row) -> Chat:
-    keys = row.keys()
     return Chat(
         id=row["id"],
-        key=row["key"] if "key" in keys else None,
         title=row["title"],
         provider=row["provider"],
         model=row["model"],
@@ -298,35 +300,6 @@ def list_chats(project_id: int | None = None, limit: int = 50) -> list[Chat]:
                 "SELECT * FROM chats ORDER BY updated_at DESC LIMIT ?", (limit,)
             ).fetchall()
         return [_row_to_chat(r) for r in rows]
-
-
-def get_chat_by_key(key: str) -> Chat | None:
-    with _connect() as conn:
-        row = conn.execute("SELECT * FROM chats WHERE key=?", (key,)).fetchone()
-        return _row_to_chat(row) if row else None
-
-
-def update_chat_key(chat_id: int, key: str) -> str:
-    """Persist *key* for *chat_id* and return it."""
-    with _connect() as conn:
-        conn.execute(
-            "UPDATE chats SET key=? WHERE id=?",
-            (key, chat_id),
-        )
-    return key
-
-
-def unique_chat_key(base_key: str) -> str:
-    """Return *base_key* if unused, otherwise *base_key*-2, *base_key*-3, …"""
-    if get_chat_by_key(base_key) is None:
-        return base_key
-    n = 2
-    while True:
-        suffix = f"-{n}"
-        candidate = base_key[: 10 - len(suffix)] + suffix
-        if get_chat_by_key(candidate) is None:
-            return candidate
-        n += 1
 
 
 def update_chat_title(chat_id: int, title: str) -> None:
