@@ -10,7 +10,7 @@ import pytest
 from termchat.core import context
 from termchat.core.providers.base import CompletionResult
 from termchat.storage import database
-from termchat.storage.models import Message, Project, ProjectFile
+from termchat.storage.models import Message, MessageAttachment, Project, ProjectFile
 
 from tests.conftest import MockProvider
 
@@ -135,6 +135,40 @@ class TestMessagesToApiFormat:
         result = context.messages_to_api_format(msgs)
         assert [r["content"] for r in result] == ["q1", "a1", "q2"]
 
+    def test_image_attachment_becomes_multimodal_blocks(self):
+        import base64
+        png = b"\x89PNG\r\n\x1a\n" + b"\x00" * 8
+        m = _msg("what's this?", "user")
+        m.attachments = [MessageAttachment(
+            id=1, message_id=m.id, kind="image",
+            media_type="image/png", filename="moon.png", data=png,
+        )]
+        result = context.messages_to_api_format([m])
+        assert len(result) == 1
+        content = result[0]["content"]
+        assert isinstance(content, list)
+        assert content[0]["type"] == "image"
+        assert content[0]["source"]["media_type"] == "image/png"
+        assert content[0]["source"]["data"] == base64.b64encode(png).decode("ascii")
+        assert content[1] == {"type": "text", "text": "what's this?"}
+
+    def test_image_only_message_omits_text_block(self):
+        png = b"\x89PNG\r\n\x1a\n"
+        m = _msg("", "user")
+        m.attachments = [MessageAttachment(
+            id=1, message_id=m.id, kind="image",
+            media_type="image/png", filename="x.png", data=png,
+        )]
+        result = context.messages_to_api_format([m])
+        content = result[0]["content"]
+        assert len(content) == 1
+        assert content[0]["type"] == "image"
+
+    def test_text_only_message_keeps_string_content(self):
+        m = _msg("hello", "user")
+        result = context.messages_to_api_format([m])
+        assert result[0]["content"] == "hello"
+
 
 # ── total_chars / needs_compression ──────────────────────────────────────────
 
@@ -257,3 +291,60 @@ class TestGenerateChatTitle:
         msg_content = provider.complete_calls[0][0][0]["content"]
         # The content passed to provider should not contain 1000 x's
         assert "x" * 401 not in msg_content
+
+
+# ── generate_title_from_messages ──────────────────────────────────────────────
+
+class TestGenerateTitleFromMessages:
+    def test_returns_provider_title(self):
+        msgs = [_msg("Explain quicksort to me.", "user", id=1),
+                _msg("Quicksort works by...", "assistant", id=2)]
+        provider = MockProvider(response="Sorting Algorithms Explained")
+        title = context.generate_title_from_messages(msgs, provider)
+        assert title == "Sorting Algorithms Explained"
+
+    def test_strips_quotes(self):
+        msgs = [_msg("hi", "user", id=1)]
+        provider = MockProvider(response='"My Title"')
+        title = context.generate_title_from_messages(msgs, provider)
+        assert title == "My Title"
+
+    def test_fallback_on_empty_response(self):
+        msgs = [_msg("hello world this is a message", "user", id=1)]
+        provider = MockProvider(response="")
+        title = context.generate_title_from_messages(msgs, provider)
+        assert title  # any non-empty string
+
+    def test_fallback_on_provider_exception(self):
+        class BrokenProvider(MockProvider):
+            def complete(self, *args, **kwargs):
+                raise RuntimeError("API down")
+
+        msgs = [_msg("explain rust lifetimes please", "user", id=1)]
+        title = context.generate_title_from_messages(msgs, BrokenProvider())
+        assert title  # any non-empty string
+
+    def test_empty_messages_returns_new_chat(self):
+        provider = MockProvider(response="")
+        title = context.generate_title_from_messages([], provider)
+        assert title == "New Chat"
+
+    def test_conversation_formatted_for_provider(self):
+        msgs = [_msg("hello", "user", id=1),
+                _msg("hi there", "assistant", id=2)]
+        provider = MockProvider(response="Title")
+        context.generate_title_from_messages(msgs, provider)
+        assert len(provider.complete_calls) == 1
+        content = provider.complete_calls[0][0][0]["content"]
+        assert "user: hello" in content
+        assert "assistant: hi there" in content
+
+    def test_truncates_long_conversation_from_start(self):
+        long_content = "x" * 5000
+        msgs = [_msg(long_content, "user", id=1),
+                _msg(long_content, "assistant", id=2)]
+        provider = MockProvider(response="Title")
+        context.generate_title_from_messages(msgs, provider)
+        content = provider.complete_calls[0][0][0]["content"]
+        # Total would be 10000+ chars; result must be under 8100 chars
+        assert len(content) < 8100
