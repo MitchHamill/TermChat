@@ -26,7 +26,38 @@ termchat chat list
 TERMCHAT_CONFIG_DIR=/tmp/tc termchat chat new   # isolated test environment
 ```
 
-There are no automated tests; manual testing via the CLI is the current verification path. Use `TERMCHAT_CONFIG_DIR` to avoid touching your real database.
+Manual testing via the CLI remains an option. Use `TERMCHAT_CONFIG_DIR` to avoid touching your real database.
+
+## Testing
+
+Install dev dependencies and run the suite:
+
+```bash
+pip install -e ".[dev]"   # adds pytest
+pytest                    # run all tests
+pytest tests/test_database.py   # single file
+pytest -k "compress"     # filter by name
+```
+
+The suite is pure unit/integration — no network calls, no API key required.
+
+### Test layout
+
+```
+tests/
+├── conftest.py        — MockProvider (deterministic, no-op) + db fixture (fresh SQLite per test)
+├── test_models.py     — Message.total_tokens, char_count, Project.files defaults
+├── test_database.py   — CRUD for projects, project_files, chats, messages
+├── test_context.py    — build_system_prompt, messages_to_api_format, compression, title gen
+├── test_chat.py       — send_message + get_chat_with_messages via MockProvider
+└── test_config.py     — get/set API key, model, provider; env override; corrupt JSON
+```
+
+### Key conventions
+
+- **`db` fixture** — each test that touches the database receives an isolated SQLite file in `tmp_path`; `database._db_path` is reset to `None` on teardown so tests never share state.
+- **`MockProvider`** — implements `BaseProvider` with a fixed `response` string; records calls to `.complete_calls` and `.stream_calls` for assertions; raises no network errors.
+- **`isolated_config` fixture** (auto-used in `test_config.py`) — redirects `CONFIG_DIR` / `CONFIG_FILE` to `tmp_path` and clears `ANTHROPIC_API_KEY` from the environment so tests never read or write real config files.
 
 ## Architecture
 
