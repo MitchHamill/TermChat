@@ -64,6 +64,7 @@ _REPL_HELP = """\
   [cyan]/switch[/] ID           — switch to another chat by numeric ID
   [cyan]/rename[/] [ID] TEXT    — rename this chat, or another chat by numeric ID
   [cyan]/delete[/] [ID]         — delete this chat (exits) or another chat by numeric ID
+  [cyan]/attach[/] PATH         — attach a file to your next message
   [cyan]/menu[/]                — return to the chat selection screen (also: Tab)
   [cyan]/quit[/]                — quit termchat (also: /exit, Ctrl-C, Ctrl-D)
 
@@ -72,13 +73,11 @@ _REPL_HELP = """\
 
 _REPL_COMMANDS = {
     "/help", "/history", "/tokens", "/compress", "/title", "/clear",
-    "/chats", "/switch", "/rename", "/delete",
+    "/chats", "/switch", "/rename", "/delete", "/attach",
     "/menu", "/quit", "/exit",
 }
 
-_TOOLBAR = (
-    " [Tab] launcher   [/help] commands   [Ctrl-C] quit   [Alt-Enter] newline "
-)
+_TOOLBAR_BASE = " [Tab] launcher   [/help] commands   [Ctrl-C] quit   [Alt-Enter] newline "
 
 # ── Input: prompt strings & key bindings ─────────────────────────────────────
 
@@ -137,12 +136,20 @@ def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = 
       "menu" — user wants to return to the launcher
       None  — session ended (caller should exit or return to launcher)
     """
+    _pending_attachments: list[tuple[str, str]] = []
+
+    def _toolbar() -> str:
+        if _pending_attachments:
+            names = ", ".join(n for n, _ in _pending_attachments)
+            return f"{_TOOLBAR_BASE} | +{len(_pending_attachments)} attached: {names} "
+        return _TOOLBAR_BASE
+
     session: PromptSession = PromptSession(
         history=InMemoryHistory(),
         key_bindings=_KB,
         multiline=True,
         prompt_continuation=lambda _w, _ln, _sw: _PROMPT_CONT,
-        bottom_toolbar=_TOOLBAR,
+        bottom_toolbar=_toolbar,
     )
 
     _initial_message = (initial_message or "").strip() or None
@@ -168,21 +175,78 @@ def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = 
         sys.stdout.write(f"\033[{rows}A\033[J")
         sys.stdout.flush()
 
+    # ── Attachment helper ─────────────────────────────────────────────────
+    def _handle_attach(path_str: str) -> None:
+        from pathlib import Path
+        from termchat.cli.file_picker import FilePicker
+
+        # /attach <file>  — attach directly without opening the picker
+        if path_str:
+            p = Path(path_str).expanduser()
+            if p.is_file():
+                try:
+                    _pending_attachments.append((p.name, p.read_text(errors="replace")))
+                    success(f"'{p.name}' attached — will be included in your next message.")
+                except Exception as exc:
+                    error(f"Could not read '{p.name}': {exc}")
+                return
+            elif p.is_dir():
+                start_dir = p
+            else:
+                error(f"Path not found: {p}")
+                return
+        else:
+            start_dir = None
+
+        selected = FilePicker(start_dir).run()
+        if not selected:
+            return
+
+        failed = 0
+        for path in selected:
+            try:
+                _pending_attachments.append((path.name, path.read_text(errors="replace")))
+            except Exception:
+                failed += 1
+
+        attached = len(selected) - failed
+        if attached:
+            preview = ", ".join(p.name for p in selected[:3])
+            if len(selected) > 3:
+                preview += f" +{len(selected) - 3} more"
+            success(f"{attached} file{'s' if attached != 1 else ''} attached: {preview}")
+        if failed:
+            warn(f"{failed} file(s) could not be read and were skipped.")
+
     # ── AI turn helper (closure over chat, provider, project) ─────────────
     def _do_ai_turn(user_input: str) -> bool:
         """Render user message, call AI, render response.
 
         Returns True on success, False on API error (caller should continue).
         """
+        if _pending_attachments:
+            file_blocks = "\n\n".join(
+                f'<file name="{name}">\n{content}\n</file>'
+                for name, content in _pending_attachments
+            )
+            api_input = f"{file_blocks}\n\n{user_input}"
+            attach_names = [name for name, _ in _pending_attachments]
+            _pending_attachments.clear()
+        else:
+            api_input = user_input
+            attach_names = []
+
         console.print(Rule("[bold blue]You[/]", align="left", style="blue dim"))
         console.print(user_input)
+        if attach_names:
+            console.print(f"[dim]  + {', '.join(attach_names)}[/]")
         console.print()
 
         with console.status("[green]Thinking…[/]", spinner="dots"):
             try:
                 user_msg, asst_msg, compressed = chat_engine.send_message(
                     chat,
-                    user_input,
+                    api_input,
                     provider,
                     project=project,
                     auto_compress=True,
@@ -234,6 +298,10 @@ def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = 
                     sys.exit(0)
                 if raw.lower() == "/menu":
                     return "menu"
+                raw_cmd = raw.partition(" ")[0].lower()
+                if raw_cmd == "/attach":
+                    _handle_attach(raw.partition(" ")[2].strip())
+                    continue
                 first_input = raw
 
         with console.status("[dim]Starting chat…[/]"):
@@ -318,6 +386,10 @@ def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = 
                 success(f"Compressed {n} messages into a summary.")
             else:
                 warn("Nothing to compress (too few messages).")
+            continue
+
+        if cmd == "/attach":
+            _handle_attach(rest.strip())
             continue
 
         if cmd == "/title":

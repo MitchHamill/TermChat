@@ -19,6 +19,7 @@ from prompt_toolkit.layout.dimension import D
 from termchat.storage import database
 from termchat.storage.models import Project
 from termchat.cli.launcher import _SEP, _STYLE
+from termchat.cli.file_picker import disambiguate
 
 
 class ProjectWizard:
@@ -143,7 +144,7 @@ class ProjectWizard:
             lines.append(("class:dim", "  (none)\n"))
         else:
             ordered = sorted(self._fb_selected, key=lambda p: p.name)
-            labels = _disambiguate(ordered)
+            labels = disambiguate(ordered)
             for path in ordered:
                 lines.append(("", f"  {labels[path]}\n"))
         return lines
@@ -386,14 +387,3 @@ class ProjectWizard:
 
         return self.result
 
-
-# ── Helpers ───────────────────────────────────────────────────────────────────
-
-def _disambiguate(paths: list[Path]) -> dict[Path, str]:
-    """Return display labels; show parent/name when two paths share a filename."""
-    from collections import Counter
-    counts = Counter(p.name for p in paths)
-    return {
-        p: (f"{p.parent.name}/{p.name}" if counts[p.name] > 1 else p.name)
-        for p in paths
-    }
