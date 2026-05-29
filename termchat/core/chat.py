@@ -18,6 +18,7 @@ def send_message(
     project: Project | None = None,
     on_chunk: Callable[[str], None] | None = None,
     auto_compress: bool = True,
+    attachments: list[dict] | None = None,
 ) -> tuple[Message, Message, bool]:
     """Send *user_text*, stream the response, persist both messages.
 
@@ -25,9 +26,16 @@ def send_message(
 
     *on_chunk* is called with each streamed text chunk so the UI can render
     progressively.
+
+    *attachments* is a list of binary attachment dicts
+    ({"kind","filename","media_type","data"}) — typically images — that get
+    persisted on the user message and forwarded to the provider as multimodal
+    content blocks.
     """
     # 1. Persist the user turn
-    user_msg = database.add_message(chat.id, "user", user_text)
+    user_msg = database.add_message(
+        chat.id, "user", user_text, attachments=attachments
+    )
     database.touch_chat(chat.id)
 
     # 2. Build context for the API call

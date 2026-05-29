@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Generator
 
-from termchat.storage.models import Chat, Message, Project, ProjectFile
+from termchat.storage.models import Chat, Message, MessageAttachment, Project, ProjectFile
 
 # ── Schema ───────────────────────────────────────────────────────────────────
 
@@ -59,8 +59,19 @@ CREATE TABLE IF NOT EXISTS messages (
     created_at    TEXT    NOT NULL DEFAULT (datetime('now'))
 );
 
+CREATE TABLE IF NOT EXISTS message_attachments (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    message_id  INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+    kind        TEXT    NOT NULL CHECK(kind IN ('image', 'document')),
+    media_type  TEXT    NOT NULL,
+    filename    TEXT    NOT NULL,
+    data        BLOB    NOT NULL,
+    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+);
+
 CREATE INDEX IF NOT EXISTS idx_messages_chat_id ON messages(chat_id);
 CREATE INDEX IF NOT EXISTS idx_chats_project_id ON chats(project_id);
+CREATE INDEX IF NOT EXISTS idx_attachments_message_id ON message_attachments(message_id);
 """
 
 # ── Connection management ────────────────────────────────────────────────────
@@ -89,6 +100,31 @@ def _migrate(conn: sqlite3.Connection) -> None:
         conn.execute(
             "CREATE UNIQUE INDEX IF NOT EXISTS idx_chats_key ON chats(key) WHERE key IS NOT NULL"
         )
+    # Expand message_attachments.kind to include 'document'.
+    # SQLite can't ALTER a CHECK constraint, so we recreate the table if needed.
+    row = conn.execute(
+        "SELECT sql FROM sqlite_master WHERE type='table' AND name='message_attachments'"
+    ).fetchone()
+    if row and "'image'" in row["sql"] and "'document'" not in row["sql"]:
+        with suppress(Exception):
+            conn.execute("ALTER TABLE message_attachments RENAME TO _ma_backup")
+            conn.execute("""
+                CREATE TABLE message_attachments (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    message_id  INTEGER NOT NULL REFERENCES messages(id) ON DELETE CASCADE,
+                    kind        TEXT    NOT NULL CHECK(kind IN ('image', 'document')),
+                    media_type  TEXT    NOT NULL,
+                    filename    TEXT    NOT NULL,
+                    data        BLOB    NOT NULL,
+                    created_at  TEXT    NOT NULL DEFAULT (datetime('now'))
+                )
+            """)
+            conn.execute("INSERT INTO message_attachments SELECT * FROM _ma_backup")
+            conn.execute("DROP TABLE _ma_backup")
+            conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_attachments_message_id"
+                " ON message_attachments(message_id)"
+            )
 
 
 @contextmanager
@@ -331,17 +367,62 @@ def add_message(
     content: str,
     input_tokens: int | None = None,
     output_tokens: int | None = None,
+    *,
+    attachments: list[dict] | None = None,
 ) -> Message:
+    """Insert a message and, optionally, its binary attachments.
+
+    Each attachment in *attachments* is a dict with keys: kind, media_type,
+    filename, data (bytes).
+    """
     with _connect() as conn:
         cur = conn.execute(
             """INSERT INTO messages (chat_id, role, content, input_tokens, output_tokens)
                VALUES (?, ?, ?, ?, ?)""",
             (chat_id, role, content, input_tokens, output_tokens),
         )
+        message_id = cur.lastrowid
+        if attachments:
+            conn.executemany(
+                """INSERT INTO message_attachments
+                       (message_id, kind, media_type, filename, data)
+                   VALUES (?, ?, ?, ?, ?)""",
+                [
+                    (
+                        message_id,
+                        a["kind"],
+                        a["media_type"],
+                        a["filename"],
+                        a["data"],
+                    )
+                    for a in attachments
+                ],
+            )
         row = conn.execute(
-            "SELECT * FROM messages WHERE id=?", (cur.lastrowid,)
+            "SELECT * FROM messages WHERE id=?", (message_id,)
         ).fetchone()
-        return _row_to_message(row)
+        msg = _row_to_message(row)
+        msg.attachments = _get_attachments_for_message(conn, message_id)
+        return msg
+
+
+def _get_attachments_for_message(conn: sqlite3.Connection, message_id: int) -> list[MessageAttachment]:
+    rows = conn.execute(
+        """SELECT id, message_id, kind, media_type, filename, data
+           FROM message_attachments WHERE message_id=? ORDER BY id""",
+        (message_id,),
+    ).fetchall()
+    return [
+        MessageAttachment(
+            id=r["id"],
+            message_id=r["message_id"],
+            kind=r["kind"],
+            media_type=r["media_type"],
+            filename=r["filename"],
+            data=bytes(r["data"]),
+        )
+        for r in rows
+    ]
 
 
 def get_messages(chat_id: int) -> list[Message]:
@@ -350,7 +431,32 @@ def get_messages(chat_id: int) -> list[Message]:
             "SELECT * FROM messages WHERE chat_id=? ORDER BY created_at, id",
             (chat_id,),
         ).fetchall()
-        return [_row_to_message(r) for r in rows]
+        messages = [_row_to_message(r) for r in rows]
+        # Bulk-load attachments in one query
+        if messages:
+            ids = [m.id for m in messages]
+            placeholders = ",".join("?" * len(ids))
+            att_rows = conn.execute(
+                f"""SELECT id, message_id, kind, media_type, filename, data
+                    FROM message_attachments
+                    WHERE message_id IN ({placeholders}) ORDER BY message_id, id""",
+                ids,
+            ).fetchall()
+            by_msg: dict[int, list[MessageAttachment]] = {}
+            for r in att_rows:
+                by_msg.setdefault(r["message_id"], []).append(
+                    MessageAttachment(
+                        id=r["id"],
+                        message_id=r["message_id"],
+                        kind=r["kind"],
+                        media_type=r["media_type"],
+                        filename=r["filename"],
+                        data=bytes(r["data"]),
+                    )
+                )
+            for m in messages:
+                m.attachments = by_msg.get(m.id, [])
+        return messages
 
 
 def delete_messages_before(chat_id: int, before_id: int) -> int:

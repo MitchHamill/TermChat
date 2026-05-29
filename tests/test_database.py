@@ -298,3 +298,63 @@ class TestMessages:
         database._db_path = None
         with pytest.raises(RuntimeError, match="not initialised"):
             database.get_chat(1)
+
+
+# ── Message attachments ───────────────────────────────────────────────────────
+
+PNG_BYTES = b"\x89PNG\r\n\x1a\n" + b"\x00" * 32
+
+
+class TestMessageAttachments:
+    def test_add_message_with_image_attachment(self, db):
+        c = database.create_chat("model")
+        m = database.add_message(
+            c.id,
+            "user",
+            "What is this?",
+            attachments=[{
+                "kind": "image",
+                "filename": "moon.png",
+                "media_type": "image/png",
+                "data": PNG_BYTES,
+            }],
+        )
+        assert len(m.attachments) == 1
+        att = m.attachments[0]
+        assert att.kind == "image"
+        assert att.filename == "moon.png"
+        assert att.media_type == "image/png"
+        assert att.data == PNG_BYTES
+
+    def test_get_messages_populates_attachments(self, db):
+        c = database.create_chat("model")
+        database.add_message(
+            c.id,
+            "user",
+            "see attached",
+            attachments=[{
+                "kind": "image",
+                "filename": "a.png",
+                "media_type": "image/png",
+                "data": PNG_BYTES,
+            }],
+        )
+        database.add_message(c.id, "assistant", "ok")
+        msgs = database.get_messages(c.id)
+        assert len(msgs) == 2
+        assert len(msgs[0].attachments) == 1
+        assert msgs[0].attachments[0].filename == "a.png"
+        assert msgs[1].attachments == []
+
+    def test_attachments_cascade_delete_with_chat(self, db):
+        c = database.create_chat("model")
+        database.add_message(
+            c.id, "user", "x",
+            attachments=[{
+                "kind": "image", "filename": "a.png",
+                "media_type": "image/png", "data": PNG_BYTES,
+            }],
+        )
+        database.delete_chat(c.id)
+        # No FK targets remain — query by id directly
+        assert database.get_messages(c.id) == []

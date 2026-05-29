@@ -35,6 +35,10 @@ def render_message(msg: Message, *, markdown: bool = True) -> None:
     if msg.role == "user":
         console.print(Rule("[bold blue]You[/]", align="left", style="blue dim"))
         console.print(msg.content)
+        if msg.attachments:
+            kind_label = {"image": "image", "document": "PDF"}
+            names = ", ".join(f"{a.filename} ({kind_label.get(a.kind, a.kind)})" for a in msg.attachments)
+            console.print(f"[dim]  + {names}[/]")
         console.print()
     elif msg.role == "assistant":
         console.print(Rule("[bold green]Claude[/]", align="left", style="green dim"))

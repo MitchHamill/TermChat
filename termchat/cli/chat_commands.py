@@ -6,6 +6,7 @@ import sys
 
 import click
 from prompt_toolkit import PromptSession
+from prompt_toolkit.completion import Completer, Completion
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
 from rich.console import Console
@@ -62,7 +63,7 @@ _REPL_HELP = """\
   [cyan]/clear[/]               — clear the terminal
   [cyan]/chats[/]               — list recent chats
   [cyan]/switch[/] ID           — switch to another chat by numeric ID
-  [cyan]/rename[/] [ID] TEXT    — rename this chat, or another chat by numeric ID
+  [cyan]/rename[/] [ID] [TEXT]  — rename this chat (omit TEXT to generate from conversation)
   [cyan]/delete[/] [ID]         — delete this chat (exits) or another chat by numeric ID
   [cyan]/attach[/] PATH         — attach a file to your next message
   [cyan]/menu[/]                — return to the chat selection screen (also: Tab)
@@ -76,6 +77,39 @@ _REPL_COMMANDS = {
     "/chats", "/switch", "/rename", "/delete", "/attach",
     "/menu", "/quit", "/exit",
 }
+
+_COMMAND_META = {
+    "/help": "show this help",
+    "/history": "browse conversation history",
+    "/tokens": "show token usage",
+    "/compress": "compress context",
+    "/title": "set chat title",
+    "/clear": "clear terminal",
+    "/chats": "list recent chats",
+    "/switch": "switch to another chat",
+    "/rename": "rename this chat",
+    "/delete": "delete this chat",
+    "/attach": "attach a file",
+    "/menu": "return to launcher",
+    "/quit": "quit termchat",
+    "/exit": "quit termchat",
+}
+
+
+class _CommandCompleter(Completer):
+    def get_completions(self, document, complete_event):
+        text = document.text_before_cursor
+        if not text.startswith("/") or " " in text:
+            return
+        prefix = text.lower()
+        for cmd in sorted(_REPL_COMMANDS):
+            if cmd.startswith(prefix):
+                yield Completion(
+                    cmd,
+                    start_position=-len(text),
+                    display=cmd,
+                    display_meta=_COMMAND_META.get(cmd, ""),
+                )
 
 _TOOLBAR_BASE = " [Tab] launcher   [/help] commands   [Ctrl-C] quit   [Alt-Enter] newline "
 
@@ -103,7 +137,19 @@ def _make_keybindings() -> KeyBindings:
 
     @kb.add("tab")
     def _go_to_menu(event) -> None:
-        event.app.exit(exception=_MenuRequest())
+        buf = event.current_buffer
+        if buf.complete_state:
+            buf.complete_next()
+        else:
+            event.app.exit(exception=_MenuRequest())
+
+    @kb.add("backspace")
+    def _smart_backspace(event) -> None:
+        buf = event.current_buffer
+        buf.delete_before_cursor()
+        text = buf.text
+        if text.startswith("/") and " " not in text:
+            buf.start_completion(select_first=False)
 
     return kb
 
@@ -128,6 +174,87 @@ def _resolve_provider(provider_name: str | None, model: str | None) -> tuple[str
 
 # ── REPL loop ─────────────────────────────────────────────────────────────────
 
+def _extract_docx_text(data: bytes) -> str:
+    """Pull plain text out of a .docx without external dependencies.
+
+    docx files are zip archives containing XML.  We walk every <w:t> element
+    in word/document.xml and join them with spaces.
+    """
+    import io
+    import xml.etree.ElementTree as ET
+    import zipfile
+
+    WNS = "{http://schemas.openxmlformats.org/wordprocessingml/2006/main}"
+    with zipfile.ZipFile(io.BytesIO(data)) as z:
+        with z.open("word/document.xml") as f:
+            tree = ET.parse(f)
+    parts: list[str] = []
+    for elem in tree.iter(f"{WNS}t"):
+        if elem.text:
+            parts.append(elem.text)
+    return " ".join(parts)
+
+
+def _sniff_attachment(path) -> dict | None:
+    """Inspect a file and return a pending-attachment dict, or None to skip.
+
+    Recognised kinds:
+      "image"    — jpeg/png/gif/webp → Anthropic vision block
+      "document" — PDF              → Anthropic document block (base64)
+      "text"     — docx text extract, or any UTF-8-decodable file → <file> block
+      None       — unreadable binary: caller should warn and skip
+    """
+    import mimetypes
+    from pathlib import Path
+
+    p = Path(path)
+    raw = p.read_bytes()
+
+    # ── Images ────────────────────────────────────────────────────────────────
+    image_type: str | None = None
+    if raw.startswith(b"\xff\xd8\xff"):
+        image_type = "image/jpeg"
+    elif raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        image_type = "image/png"
+    elif raw.startswith(b"GIF87a") or raw.startswith(b"GIF89a"):
+        image_type = "image/gif"
+    elif raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        image_type = "image/webp"
+    else:
+        guessed, _ = mimetypes.guess_type(p.name)
+        if guessed in ("image/jpeg", "image/png", "image/gif", "image/webp"):
+            image_type = guessed
+
+    if image_type:
+        return {"kind": "image", "filename": p.name, "media_type": image_type, "data": raw}
+
+    # ── PDF (Anthropic document block) ────────────────────────────────────────
+    if raw[:4] == b"%PDF":
+        return {"kind": "document", "filename": p.name, "media_type": "application/pdf", "data": raw}
+
+    # ── docx — extract text from the embedded XML ────────────────────────────
+    # docx (and xlsx/pptx) are zip files starting with PK\x03\x04.
+    if raw[:4] == b"PK\x03\x04":
+        try:
+            text = _extract_docx_text(raw)
+            if text:
+                return {"kind": "text", "filename": p.name, "content": text}
+        except Exception:
+            pass
+        # Not a docx or extraction failed — fall through to binary warning
+        return None
+
+    # ── Plain text (UTF-8 / ASCII) ────────────────────────────────────────────
+    try:
+        text = raw.decode("utf-8")
+        return {"kind": "text", "filename": p.name, "content": text}
+    except UnicodeDecodeError:
+        pass
+
+    # ── Unrecognised binary — caller should warn ──────────────────────────────
+    return None
+
+
 def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = None) -> int | str | None:
     """Interactive REPL for a chat session.
 
@@ -136,11 +263,11 @@ def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = 
       "menu" — user wants to return to the launcher
       None  — session ended (caller should exit or return to launcher)
     """
-    _pending_attachments: list[tuple[str, str]] = []
+    _pending_attachments: list[dict] = []
 
     def _toolbar() -> str:
         if _pending_attachments:
-            names = ", ".join(n for n, _ in _pending_attachments)
+            names = ", ".join(a["filename"] for a in _pending_attachments)
             return f"{_TOOLBAR_BASE} | +{len(_pending_attachments)} attached: {names} "
         return _TOOLBAR_BASE
 
@@ -150,6 +277,8 @@ def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = 
         multiline=True,
         prompt_continuation=lambda _w, _ln, _sw: _PROMPT_CONT,
         bottom_toolbar=_toolbar,
+        completer=_CommandCompleter(),
+        complete_while_typing=True,
     )
 
     _initial_message = (initial_message or "").strip() or None
@@ -185,8 +314,13 @@ def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = 
             p = Path(path_str).expanduser()
             if p.is_file():
                 try:
-                    _pending_attachments.append((p.name, p.read_text(errors="replace")))
-                    success(f"'{p.name}' attached — will be included in your next message.")
+                    att = _sniff_attachment(p)
+                    if att is None:
+                        error(f"'{p.name}' is a binary format Claude can't read — try converting it to PDF or plain text first.")
+                        return
+                    _pending_attachments.append(att)
+                    kind_label = {"image": "image", "document": "PDF document"}.get(att["kind"], "file")
+                    success(f"'{p.name}' attached as {kind_label} — will be included in your next message.")
                 except Exception as exc:
                     error(f"Could not read '{p.name}': {exc}")
                 return
@@ -205,7 +339,11 @@ def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = 
         failed = 0
         for path in selected:
             try:
-                _pending_attachments.append((path.name, path.read_text(errors="replace")))
+                att = _sniff_attachment(path)
+                if att is None:
+                    failed += 1
+                else:
+                    _pending_attachments.append(att)
             except Exception:
                 failed += 1
 
@@ -224,17 +362,31 @@ def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = 
 
         Returns True on success, False on API error (caller should continue).
         """
-        if _pending_attachments:
+        text_atts = [a for a in _pending_attachments if a["kind"] == "text"]
+        binary_kinds = [a for a in _pending_attachments if a["kind"] in ("image", "document")]
+        attach_names = [a["filename"] for a in _pending_attachments]
+
+        if text_atts:
             file_blocks = "\n\n".join(
-                f'<file name="{name}">\n{content}\n</file>'
-                for name, content in _pending_attachments
+                f'<file name="{a["filename"]}">\n{a["content"]}\n</file>'
+                for a in text_atts
             )
             api_input = f"{file_blocks}\n\n{user_input}"
-            attach_names = [name for name, _ in _pending_attachments]
-            _pending_attachments.clear()
         else:
             api_input = user_input
-            attach_names = []
+
+        # Images and PDFs are stored as binary and forwarded as content blocks.
+        binary_atts = [
+            {
+                "kind": a["kind"],
+                "filename": a["filename"],
+                "media_type": a["media_type"],
+                "data": a["data"],
+            }
+            for a in binary_kinds
+        ] or None
+
+        _pending_attachments.clear()
 
         console.print(Rule("[bold blue]You[/]", align="left", style="blue dim"))
         console.print(user_input)
@@ -250,6 +402,7 @@ def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = 
                     provider,
                     project=project,
                     auto_compress=True,
+                    attachments=binary_atts,
                 )
             except Exception as exc:
                 error(f"API error: {exc}")
@@ -430,7 +583,13 @@ def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = 
         if cmd == "/rename":
             parts = rest.strip().split(None, 1)
             if not parts:
-                warn("Usage: /rename [<key or id>] <new title>")
+                # No args — generate title from the full conversation
+                msgs = database.get_messages(chat.id)
+                with console.status("[dim]Generating title…[/]"):
+                    new_title = ctx.generate_title_from_messages(msgs, provider, project=project)
+                database.update_chat_title(chat.id, new_title)
+                chat.title = new_title
+                success(f"Chat renamed to '{new_title}'.")
                 continue
             # If the first token resolves to a chat AND a second token exists,
             # treat it as a chat reference; otherwise rename the current chat.
@@ -442,7 +601,7 @@ def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = 
                 target_chat = chat
                 new_title = rest.strip()
             if not new_title:
-                warn("Usage: /rename [<key or id>] <new title>")
+                warn("Usage: /rename [ID] [TEXT]")
                 continue
             database.update_chat_title(target_chat.id, new_title)
             if target_chat.id == chat.id:
