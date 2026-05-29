@@ -62,7 +62,7 @@ _REPL_HELP = """\
   [cyan]/clear[/]               — clear the terminal
   [cyan]/chats[/]               — list recent chats
   [cyan]/switch[/] ID           — switch to another chat by numeric ID
-  [cyan]/rename[/] [ID] TEXT    — rename this chat, or another chat by numeric ID
+  [cyan]/rename[/] [ID] [TEXT]  — rename this chat (omit TEXT to generate from conversation)
   [cyan]/delete[/] [ID]         — delete this chat (exits) or another chat by numeric ID
   [cyan]/attach[/] PATH         — attach a file to your next message
   [cyan]/menu[/]                — return to the chat selection screen (also: Tab)
@@ -128,6 +128,49 @@ def _resolve_provider(provider_name: str | None, model: str | None) -> tuple[str
 
 # ── REPL loop ─────────────────────────────────────────────────────────────────
 
+def _sniff_attachment(path) -> dict:
+    """Inspect a file and return a pending-attachment dict.
+
+    For images returns {"kind": "image", "filename", "media_type", "data": bytes}.
+    For everything else returns {"kind": "text", "filename", "content": str}.
+    """
+    import mimetypes
+    from pathlib import Path
+
+    p = Path(path)
+    raw = p.read_bytes()
+
+    # Magic-byte sniff for the four image types Claude vision supports
+    media_type: str | None = None
+    if raw.startswith(b"\xff\xd8\xff"):
+        media_type = "image/jpeg"
+    elif raw.startswith(b"\x89PNG\r\n\x1a\n"):
+        media_type = "image/png"
+    elif raw.startswith(b"GIF87a") or raw.startswith(b"GIF89a"):
+        media_type = "image/gif"
+    elif raw[:4] == b"RIFF" and raw[8:12] == b"WEBP":
+        media_type = "image/webp"
+    else:
+        guessed, _ = mimetypes.guess_type(p.name)
+        if guessed in ("image/jpeg", "image/png", "image/gif", "image/webp"):
+            media_type = guessed
+
+    if media_type:
+        return {
+            "kind": "image",
+            "filename": p.name,
+            "media_type": media_type,
+            "data": raw,
+        }
+
+    # Fall back to text
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeDecodeError:
+        text = raw.decode("utf-8", errors="replace")
+    return {"kind": "text", "filename": p.name, "content": text}
+
+
 def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = None) -> int | str | None:
     """Interactive REPL for a chat session.
 
@@ -136,11 +179,11 @@ def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = 
       "menu" — user wants to return to the launcher
       None  — session ended (caller should exit or return to launcher)
     """
-    _pending_attachments: list[tuple[str, str]] = []
+    _pending_attachments: list[dict] = []
 
     def _toolbar() -> str:
         if _pending_attachments:
-            names = ", ".join(n for n, _ in _pending_attachments)
+            names = ", ".join(a["filename"] for a in _pending_attachments)
             return f"{_TOOLBAR_BASE} | +{len(_pending_attachments)} attached: {names} "
         return _TOOLBAR_BASE
 
@@ -185,8 +228,10 @@ def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = 
             p = Path(path_str).expanduser()
             if p.is_file():
                 try:
-                    _pending_attachments.append((p.name, p.read_text(errors="replace")))
-                    success(f"'{p.name}' attached — will be included in your next message.")
+                    att = _sniff_attachment(p)
+                    _pending_attachments.append(att)
+                    kind_label = "image" if att["kind"] == "image" else "file"
+                    success(f"'{p.name}' attached as {kind_label} — will be included in your next message.")
                 except Exception as exc:
                     error(f"Could not read '{p.name}': {exc}")
                 return
@@ -205,7 +250,7 @@ def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = 
         failed = 0
         for path in selected:
             try:
-                _pending_attachments.append((path.name, path.read_text(errors="replace")))
+                _pending_attachments.append(_sniff_attachment(path))
             except Exception:
                 failed += 1
 
@@ -224,17 +269,31 @@ def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = 
 
         Returns True on success, False on API error (caller should continue).
         """
-        if _pending_attachments:
+        text_atts = [a for a in _pending_attachments if a["kind"] == "text"]
+        image_atts = [a for a in _pending_attachments if a["kind"] == "image"]
+        attach_names = [a["filename"] for a in _pending_attachments]
+
+        if text_atts:
             file_blocks = "\n\n".join(
-                f'<file name="{name}">\n{content}\n</file>'
-                for name, content in _pending_attachments
+                f'<file name="{a["filename"]}">\n{a["content"]}\n</file>'
+                for a in text_atts
             )
             api_input = f"{file_blocks}\n\n{user_input}"
-            attach_names = [name for name, _ in _pending_attachments]
-            _pending_attachments.clear()
         else:
             api_input = user_input
-            attach_names = []
+
+        # Persistable binary attachments (images) — already in DB-ready shape
+        binary_atts = [
+            {
+                "kind": a["kind"],
+                "filename": a["filename"],
+                "media_type": a["media_type"],
+                "data": a["data"],
+            }
+            for a in image_atts
+        ] or None
+
+        _pending_attachments.clear()
 
         console.print(Rule("[bold blue]You[/]", align="left", style="blue dim"))
         console.print(user_input)
@@ -250,6 +309,7 @@ def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = 
                     provider,
                     project=project,
                     auto_compress=True,
+                    attachments=binary_atts,
                 )
             except Exception as exc:
                 error(f"API error: {exc}")
@@ -430,7 +490,13 @@ def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = 
         if cmd == "/rename":
             parts = rest.strip().split(None, 1)
             if not parts:
-                warn("Usage: /rename [<key or id>] <new title>")
+                # No args — generate title from the full conversation
+                msgs = database.get_messages(chat.id)
+                with console.status("[dim]Generating title…[/]"):
+                    new_title = ctx.generate_title_from_messages(msgs, provider, project=project)
+                database.update_chat_title(chat.id, new_title)
+                chat.title = new_title
+                success(f"Chat renamed to '{new_title}'.")
                 continue
             # If the first token resolves to a chat AND a second token exists,
             # treat it as a chat reference; otherwise rename the current chat.
@@ -442,7 +508,7 @@ def _run_repl(chat: Chat, provider, project=None, initial_message: str | None = 
                 target_chat = chat
                 new_title = rest.strip()
             if not new_title:
-                warn("Usage: /rename [<key or id>] <new title>")
+                warn("Usage: /rename [ID] [TEXT]")
                 continue
             database.update_chat_title(target_chat.id, new_title)
             if target_chat.id == chat.id:
