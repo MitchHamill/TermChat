@@ -55,28 +55,28 @@ def build_system_prompt(project: Project | None = None, extra: str = "") -> str:
 def _message_content_for_api(msg: Message):
     """Return the API ``content`` field for a stored message.
 
-    Plain text → a string (cheap, matches the historical format).
-    Has image attachments → a list of content blocks (image + text), the
-    Anthropic multimodal format.
+    Plain text (no attachments) → a string.
+    Has image/document attachments → a list of Anthropic content blocks.
     """
-    image_atts = [a for a in msg.attachments if a.kind == "image"]
-    if not image_atts:
+    binary_atts = [a for a in msg.attachments if a.kind in ("image", "document")]
+    if not binary_atts:
         return msg.content
 
     import base64
 
     blocks: list[dict] = []
-    for att in image_atts:
-        blocks.append({
-            "type": "image",
-            "source": {
-                "type": "base64",
-                "media_type": att.media_type,
-                "data": base64.b64encode(att.data).decode("ascii"),
-            },
-        })
-    # Text after images so the question follows the image, matching how
-    # users naturally describe an image they've just shared.
+    for att in binary_atts:
+        b64 = base64.b64encode(att.data).decode("ascii")
+        if att.kind == "image":
+            blocks.append({
+                "type": "image",
+                "source": {"type": "base64", "media_type": att.media_type, "data": b64},
+            })
+        else:  # document (PDF)
+            blocks.append({
+                "type": "document",
+                "source": {"type": "base64", "media_type": att.media_type, "data": b64},
+            })
     if msg.content:
         blocks.append({"type": "text", "text": msg.content})
     return blocks

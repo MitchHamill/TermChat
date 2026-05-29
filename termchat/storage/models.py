@@ -37,6 +37,16 @@ class Chat:
 
 
 @dataclass
+class MessageAttachment:
+    id: int
+    message_id: int
+    kind: str          # "image"
+    media_type: str    # e.g. "image/jpeg", "image/png"
+    filename: str
+    data: bytes
+
+
+@dataclass
 class Message:
     id: int
     chat_id: int
@@ -45,6 +55,7 @@ class Message:
     input_tokens: int | None
     output_tokens: int | None
     created_at: datetime
+    attachments: list[MessageAttachment] = field(default_factory=list)
 
     @property
     def total_tokens(self) -> int:

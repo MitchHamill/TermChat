@@ -106,6 +106,32 @@ class TestSendMessage:
         assert "prior answer" in contents
         assert "follow up" in contents
 
+    def test_image_attachment_forwarded_as_multimodal(self, db, mock_provider):
+        png = b"\x89PNG\r\n\x1a\n" + b"\x01\x02\x03"
+        c = database.create_chat("model")
+        chat_engine.send_message(
+            c,
+            "what is this?",
+            mock_provider,
+            attachments=[{
+                "kind": "image",
+                "filename": "moon.png",
+                "media_type": "image/png",
+                "data": png,
+            }],
+        )
+        # User message persisted with the binary attachment
+        msgs = database.get_messages(c.id)
+        assert len(msgs[0].attachments) == 1
+        assert msgs[0].attachments[0].data == png
+        # Provider received a multimodal content list for the user turn
+        api_messages = mock_provider.stream_calls[0][0]
+        user_block = api_messages[0]
+        assert user_block["role"] == "user"
+        assert isinstance(user_block["content"], list)
+        assert user_block["content"][0]["type"] == "image"
+        assert user_block["content"][0]["source"]["media_type"] == "image/png"
+
 
 class TestGetChatWithMessages:
     def test_returns_none_for_missing_chat(self, db):
