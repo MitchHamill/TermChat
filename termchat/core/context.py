@@ -52,6 +52,36 @@ def build_system_prompt(project: Project | None = None, extra: str = "") -> str:
     return "\n\n".join(parts)
 
 
+def _message_content_for_api(msg: Message):
+    """Return the API ``content`` field for a stored message.
+
+    Plain text → a string (cheap, matches the historical format).
+    Has image attachments → a list of content blocks (image + text), the
+    Anthropic multimodal format.
+    """
+    image_atts = [a for a in msg.attachments if a.kind == "image"]
+    if not image_atts:
+        return msg.content
+
+    import base64
+
+    blocks: list[dict] = []
+    for att in image_atts:
+        blocks.append({
+            "type": "image",
+            "source": {
+                "type": "base64",
+                "media_type": att.media_type,
+                "data": base64.b64encode(att.data).decode("ascii"),
+            },
+        })
+    # Text after images so the question follows the image, matching how
+    # users naturally describe an image they've just shared.
+    if msg.content:
+        blocks.append({"type": "text", "text": msg.content})
+    return blocks
+
+
 def messages_to_api_format(messages: list[Message]) -> list[dict]:
     """Convert stored messages to the [{role, content}] format providers accept.
 
@@ -59,6 +89,9 @@ def messages_to_api_format(messages: list[Message]) -> list[dict]:
     into the conversation flow.  Summaries are always moved to the front of the
     list: they represent *compressed older context* and must precede the recent
     messages regardless of their database insert order.
+
+    User messages with image attachments become Anthropic-style multimodal
+    content (list of image + text blocks).
     """
     summaries = [m for m in messages if m.role == "summary"]
     recents = [m for m in messages if m.role != "summary"]
@@ -68,7 +101,7 @@ def messages_to_api_format(messages: list[Message]) -> list[dict]:
         result.append({"role": "assistant", "content": msg.content})
     for msg in recents:
         role = "assistant" if msg.role == "summary" else msg.role
-        result.append({"role": role, "content": msg.content})
+        result.append({"role": role, "content": _message_content_for_api(msg)})
     return result
 
 
@@ -193,4 +226,62 @@ def generate_chat_title(first_message: str, provider: BaseProvider, *, project: 
         pass
     # Fallback: capitalize the first few words of the message
     words = first_message.split()
+    return " ".join(words[:6]) or "New Chat"
+
+
+_FULL_TITLE_SYSTEM = """\
+You generate short, descriptive chat titles.
+Given a full conversation between a user and an assistant, output a concise title \
+(4-8 words) that captures the main topic or outcome.
+
+Rules (strict):
+- Title case (capitalize major words)
+- No punctuation at the end
+- Capture the specific topic or task
+- Avoid generic filler like "Help With" or "Question About"
+- Reply with ONLY the title — no explanation, no quotes
+"""
+
+
+def generate_title_from_messages(
+    messages: list[Message],
+    provider: BaseProvider,
+    *,
+    project: Project | None = None,
+) -> str:
+    """Ask the provider to produce a title from the full conversation.
+
+    Falls back to a title derived from the first non-summary message if the
+    call fails or returns empty.
+    """
+    if not messages:
+        return "New Chat"
+
+    lines = [f"{m.role}: {m.content}" for m in messages]
+    text = "\n\n".join(lines)
+    if len(text) > 8000:
+        text = "…" + text[-7997:]
+    content = f"Conversation:\n{text}"
+
+    if project:
+        ctx_lines = [f"Project name: {project.name}"]
+        if project.instructions:
+            ctx_lines.append(f"Project instructions: {project.instructions[:300]}")
+        content += "\n\nProject context:\n" + "\n".join(ctx_lines)
+
+    try:
+        result = provider.complete(
+            messages=[{"role": "user", "content": content}],
+            system=_FULL_TITLE_SYSTEM,
+            max_tokens=30,
+        )
+        title = result.content.strip().strip('"').strip("'")
+        if title:
+            return title
+    except Exception:
+        pass
+
+    # Fallback: first few words of the first non-summary message
+    first = next((m for m in messages if m.role != "summary"), messages[0])
+    words = first.content.split()
     return " ".join(words[:6]) or "New Chat"
